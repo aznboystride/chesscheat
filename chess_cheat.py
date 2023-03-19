@@ -5,13 +5,33 @@ from mss import mss
 from PIL import Image
 import pytesseract
 import pyautogui
-
+import chess
+from skimage.metrics import structural_similarity
 from abc import *
+import os
+
+class ChessPositionTo2DPointMapper:
+    def __init__(self):
+        self.cornerDetector = FullScreenBoardCornerDetector()
+        self.whiteOrBlack = WhiteOrBlackDetector1()
+    def chessPositionTo2D(self, pos):
+        chessPosTo2DMap = {}
+        is_black = self.whiteOrBlack.isBlack()
+        letter_range = range(ord('a'), ord('h') + 1)
+        for letter in letter_range:
+            for number in range(1, 9):
+                chessPosTo2DMap[f"{chr(letter) }{number}"] = Point(letter - ord('a'), 8-number) if not is_black else Point(ord('h') - letter, number-1)
+        if pos not in chessPosTo2DMap:
+            raise Exception(f"{pos} is not a valid chess position")
+        return chessPosTo2DMap[pos]
 
 class Point:
     def __init__(self, x, y):
         self.x = x
         self.y = y
+
+    def __str__(self):
+        return f"{self.x},  {self.y}"
 
 class Corner:
     def __init__(self, topL, topR, botL, botR):
@@ -145,6 +165,22 @@ class RowNotationReader(NotationReader):
         img = self.imgReader.readImage(c)
         return img
 
+
+class MouseMover(ABC):
+
+    @abstractmethod
+    def move(self, pa, pb):
+        pass
+
+
+class MouseDragger(MouseMover):
+
+    def move(self, pa, pb):
+        pyautogui.moveTo(pa.x, pa.y)
+        time.sleep(1)
+        pyautogui.dragTo(pb.x, pb.y, button='left')
+
+
 class WhiteMoveReader:
     def __init__(self):
         self.rowReader = RowNotationReader()
@@ -221,6 +257,185 @@ class InteractiveGame(Game):
                 self.startNewGame()
             whiteTurn = not whiteTurn
 
+class WhiteOrBlackDetector(ABC):
+    @abstractmethod
+    def isBlack(self):
+        pass
+
+class PieceImageExtractor:
+
+    def __init__(self):
+        self.boardCornerDetector = FullScreenBoardCornerDetector()
+        self.whiteOrBlackDetector = WhiteOrBlackDetector1()
+        self.posTo2DMapper = ChessPositionTo2DPointMapper()
+        self.is_black = self.whiteOrBlackDetector.isBlack()
+        self.imageReader = ImageReader()
+
+    def getImage(self, pos):
+        corners = self.boardCornerDetector.detectCorners()
+        cornerPropertyReader = CornerPropertyReader(corners)
+        h = cornerPropertyReader.getHeight()
+        w = cornerPropertyReader.getWidth()
+        t = cornerPropertyReader.getTop()
+        b = cornerPropertyReader.getBot()
+        l = cornerPropertyReader.getLeft()
+        r = cornerPropertyReader.getRight()
+        hr = h // 8
+        wr = w // 8
+        pos2d = self.posTo2DMapper.chessPositionTo2D(pos)
+        col = pos2d.x
+        row = pos2d.y
+        corner = Corner(
+            Point(l+wr*col, t+hr*row),
+            Point(l+wr*(col+1), t+hr*row),
+            Point(l+wr*col, t+hr*(row+1)),
+            Point(l+wr*(col+1), t+hr*(row+1))
+        )
+        return self.imageReader.readImage(corner)
+
+
+class WhiteOrBlackDetector1(WhiteOrBlackDetector):
+
+    def __init__(self):
+        self.boardCornerDetector = FullScreenBoardCornerDetector()
+    def isBlack(self):
+        return True
+
+class UciGame(Game):
+    def endGame(self):
+        pass
+
+    def startNewGame(self):
+        pass
+
+    def __init__(self):
+        self.board = chess.Board()
+        # print(self.board)
+
+class TesseractWrapper:
+    def image_to_string(self, image):
+        return pytesseract.image_to_string(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+
+class PieceImageInterpreter(ABC):
+
+    @abstractmethod
+    def get_piece(self, image):
+        pass
+
+
+class PieceImageInterpreterEdgeSimilarity(PieceImageInterpreter):
+    def __init__(self):
+        self.chess_pieces_path = "/Users/fair/Downloads/chesspieces"
+
+    def compare_with_img_path(self, image, image2):
+        h, w = image.shape
+        image2 = cv2.resize(image2, (w, h))
+        image = cv2.Canny(image, 85, 100)
+        image2 = cv2.Canny(image2, 85, 100)
+        # black = np.zeros((h, w * 2), dtype=np.uint8)
+        # black[:h, :w] = image
+        # black[:h, w:] = image2
+        # cv2.imshow("temp", black)
+        # cv2.waitKey(0)
+        return structural_similarity(image, image2)
+
+    def get_piece(self, image):
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+        highest = 0
+        pick = None
+        for root, dirs, files in os.walk(self.chess_pieces_path):
+            for f in files:
+                pth = os.path.join(root, f)
+                image2 = cv2.imread(pth)
+                image2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
+                temp = self.compare_with_img_path(image, image2)
+                # print(f"ssim for {f}: {temp}")
+                if temp > highest:
+                    highest = temp
+                    pick = f
+        return pick
+
+
+class PieceImageInterpreterSsimGrayScale(PieceImageInterpreter):
+    def __init__(self):
+        self.chess_pieces_path = "/Users/fair/Downloads/chesspieces"
+
+    def compare_with_img_path(self, image, image2):
+        h, w = image.shape
+        image2 = cv2.resize(image2, (w,h))
+        black = np.zeros((h, w*2), dtype=np.uint8)
+        black[:h,:w] = image
+        black[:h,w:] = image2
+        cv2.imshow("temp", black)
+        cv2.waitKey(0)
+        return structural_similarity(image, image2)
+
+    def get_piece(self, image):
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+        highest = 0
+        pick = None
+        for root, dirs, files in os.walk(self.chess_pieces_path):
+            for f in files:
+                pth = os.path.join(root, f)
+                image2 = cv2.imread(pth)
+                image2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
+                temp = self.compare_with_img_path(image, image2)
+                print(f"ssim for {f}: {temp}")
+                if temp > highest:
+                    highest = temp
+                    pick = f
+        return pick
+
+
+class PieceImageInterpreterSsimColored(PieceImageInterpreter):
+    def __init__(self):
+        self.chess_pieces_path = "/Users/fair/Downloads/chesspieces"
+
+    def compare_with_img_path(self, image, image2):
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+        h, w, d = image.shape
+        image2 = cv2.resize(image2, (w, h))
+        return structural_similarity(image, image2, channel_axis=2)
+
+    def get_piece(self, image):
+        highest = 0
+        pick = None
+        for root, dirs, files in os.walk(self.chess_pieces_path):
+            for f in files:
+                pth = os.path.join(root, f)
+                image2 = cv2.imread(pth)
+                temp = self.compare_with_img_path(image, image2)
+                print(f"ssim for {f}: {temp}")
+                if temp > highest:
+                    highest = temp
+                    pick = f
+        return pick
+
+
+class PieceMover:
+    def __init__(self):
+        self.mouseDragger = MouseDragger()
+        self.mapper = ChessPositionTo2DPointMapper()
+
+    def move(self, posa, posb):
+        pa = self.mapper.chessPositionTo2D(posa)
+        pb = self.mapper.chessPositionTo2D(posb)
+        self.mouseDragger.move(pa, pb)
+
+
+# UciGame()
+# pieceInterpreter = PieceImageInterpreterEdgeSimilarity()
+# displayer = DisplayStaticImage()
+# tess = TesseractWrapper()
+# pieceExtractor = PieceImageExtractor()
+# for c in range(ord('a'), ord('h')+1):
+#     for r in range(1, 9):
+#         print(chr(c), r)
+#         img = pieceExtractor.getImage(f"{chr(c)}{r}")
+#         print(pieceInterpreter.get_piece(img))
+#         displayer.displayImage(img)
+
 #boardDet = FullScreenBoardCornerDetector()
 #boardCorner = boardDet.detectCorners()
 #notatCorner = NotationCornerDetector().detectCorners()
@@ -238,5 +453,7 @@ class InteractiveGame(Game):
 ##displayVideo = DisplayVideo(imageReader)
 ##displayVideo.displayVideo(notatCorner)
 
+pieceMover = PieceMover()
+pieceMover.move("h7", "h6")
 screenSwitch = ScreenSwitch()
-screenSwitch.switch()
+# screenSwitch.switch()
