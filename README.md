@@ -79,8 +79,8 @@ Press `Ctrl+C` to stop.
 
 ## Tests
 
-The whole suite runs with **no** third-party dependencies installed: the board
-logic is pure, and recognition is tested end-to-end through mock
+Most of the suite runs with **no** third-party dependencies installed: the
+board logic is pure, and recognition is tested end-to-end through mock
 implementations of the interfaces (synthetic board images fed through the real
 matching algorithm), so no GUI, screen, or numpy is required.
 
@@ -92,6 +92,17 @@ python3 -m unittest discover -s tests -t . -v
 python3 -m unittest tests.test_recognition
 python3 -m unittest tests.test_board.FenTests
 python3 -m unittest tests.test_board.FenTests.test_after_e4
+```
+
+In addition, `tests/test_real_images.py` runs the **real** `NumpyImageBackend`
+over real board images (the committed `tests/fixtures/boards/` PNGs, built from
+the Wikipedia piece set) for the opening 1.e4 c5 2.Nf3, verifying each evolving
+position is recovered. It needs numpy and Pillow and is skipped automatically
+when they are absent:
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m unittest tests.test_real_images
 ```
 
 ## Layout
