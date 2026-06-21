@@ -26,6 +26,17 @@ There is no build step, linter config, or requirements file. Runtime
 dependencies (`opencv-python`, `mss`, `numpy`) must be installed manually:
 `pip install opencv-python mss numpy`.
 
+## Coding preferences
+
+- Prefer a functional style: functions should avoid mutating state or causing
+  side effects, returning new values instead of modifying their inputs or
+  globals. Keep unavoidable side effects (screen capture, `input`/`print`,
+  the loop in `main`) isolated at the edges, away from the pure board logic.
+- Use functional constructs — `map`, `filter`, `lambda`, comprehensions,
+  generators, `functools`/`itertools` — and other Python features that
+  support this style, in preference to imperative accumulation where it reads
+  clearly.
+
 ## Architecture
 
 Three modules, layered capture → recognition → presentation:
