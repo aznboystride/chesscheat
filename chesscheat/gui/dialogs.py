@@ -1,4 +1,4 @@
-"""Tkinter GUIs for configuring the chessboard reader.
+"""Tkinter dialogs for configuring the chessboard reader.
 
 Two interactions:
 

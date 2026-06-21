@@ -8,13 +8,13 @@ evolve over time, with no GUI, screen, numpy or OpenCV required.
 
 import unittest
 
-import board
-import chessboard_state as app
-from interfaces import (SetupProvider, FrameSource, ImageBackend,
-                        BoardRecognizer)
-from recognition import TemplateBoardRecognizer
-from mocks import (MockSetupProvider, MockFrameSource, MockImageBackend,
-                   render_mock_image)
+from chesscheat import board
+from chesscheat import app
+from chesscheat.interfaces import (SetupProvider, FrameSource, ImageBackend,
+                                   BoardRecognizer)
+from chesscheat.recognition import TemplateBoardRecognizer
+from chesscheat.mocks import (MockSetupProvider, MockFrameSource,
+                              MockImageBackend, render_mock_image)
 
 
 def move(position, *changes):

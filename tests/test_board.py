@@ -1,8 +1,8 @@
-"""Unit tests for the pure board logic in ``board`` (no dependencies needed)."""
+"""Unit tests for the pure board logic in ``chesscheat.board``."""
 
 import unittest
 
-import board
+from chesscheat import board
 
 START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
 

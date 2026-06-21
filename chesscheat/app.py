@@ -1,15 +1,15 @@
-"""Live chessboard reader -- application entry point.
+"""Live chessboard reader -- application orchestration.
 
 The ``run`` loop is programmed entirely against the interfaces in
-``interfaces.py``: it asks a ``SetupProvider`` for the side and box, builds a
-``FrameSource`` for that box, calibrates a ``BoardRecognizer`` from the first
-frame (the starting position) and then reports every subsequent frame. ``main``
-wires the real GUI/screen/numpy implementations; tests wire mocks instead.
+``chesscheat.interfaces``: it asks a ``SetupProvider`` for the side and box,
+builds a ``FrameSource`` for that box, calibrates a ``BoardRecognizer`` from the
+first frame (the starting position) and then reports every subsequent frame.
+``main`` wires the real GUI/screen/numpy implementations; tests wire mocks.
 """
 
 import time
 
-import board
+from chesscheat import board
 
 
 def run(setup, make_frame_source, recognizer, *, on_board,
@@ -76,9 +76,10 @@ def _console_printer():
 
 def main():
     """Wire the real implementations and run the live reader."""
-    from providers import (GuiSetupProvider, PromptSetupProvider,
-                           FallbackSetupProvider, ScreenFrameSource)
-    from recognition import TemplateBoardRecognizer, NumpyImageBackend
+    from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
+                                      FallbackSetupProvider, ScreenFrameSource)
+    from chesscheat.recognition import (TemplateBoardRecognizer,
+                                        NumpyImageBackend)
 
     print("=== Live Chessboard Reader ===")
     print("Make sure the board is in the standard starting position.\n")

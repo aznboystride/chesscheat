@@ -42,7 +42,7 @@ With the virtual environment activated and a chessboard visible on screen in
 the **starting position**:
 
 ```bash
-python3 chessboard_state.py
+python3 -m chesscheat
 ```
 
 The program opens a small GUI to configure itself:
@@ -85,20 +85,28 @@ implementations of the interfaces (synthetic board images fed through the real
 matching algorithm), so no GUI, screen, or numpy is required.
 
 ```bash
-# Run the full suite
-python3 -m unittest discover -p 'test_*.py' -v
+# Run the full suite (from the repo root)
+python3 -m unittest discover -s tests -t . -v
 
 # Run a single module / case / method
-python3 -m unittest test_recognition
-python3 -m unittest test_board.FenTests
-python3 -m unittest test_board.FenTests.test_after_e4
+python3 -m unittest tests.test_recognition
+python3 -m unittest tests.test_board.FenTests
+python3 -m unittest tests.test_board.FenTests.test_after_e4
 ```
 
-## Design
+## Layout
 
-The code is programmed to interfaces (`interfaces.py`) so implementations are
+Source lives in the `chesscheat/` package and tests in `tests/`. The code is
+programmed to the interfaces in `chesscheat/interfaces/` so implementations are
 swappable: how setup is obtained (`GuiSetupProvider`, `PromptSetupProvider`,
 `MockSetupProvider`), how frames are supplied (`ScreenFrameSource`,
 `MockFrameSource`), and how images are matched (`NumpyImageBackend`,
 `MockImageBackend`). This is what lets the program be verified against
 generated positions evolving over time without any GUI or screenshotting.
+
+```
+chesscheat/
+  app.py            board.py        __main__.py
+  interfaces/   recognition/   providers/   mocks/   capture/   gui/
+tests/
+```
