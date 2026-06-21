@@ -17,7 +17,7 @@ any of those change.
 
 - Python 3.8+
 - A real display (the tool captures the screen and cannot run headless)
-- Python modules: `mss`, `numpy`, `opencv-python` (see `requirements.txt`)
+- Python modules: `mss`, `numpy` (see `requirements.txt`)
 
 ## Installation
 
@@ -79,14 +79,26 @@ Press `Ctrl+C` to stop.
 
 ## Tests
 
-The pure board logic (coordinate mapping, labels, rendering, FEN) is unit
-tested and does not require the vision dependencies:
+The whole suite runs with **no** third-party dependencies installed: the board
+logic is pure, and recognition is tested end-to-end through mock
+implementations of the interfaces (synthetic board images fed through the real
+matching algorithm), so no GUI, screen, or numpy is required.
 
 ```bash
 # Run the full suite
-python3 -m unittest test_chessboard_state -v
+python3 -m unittest discover -p 'test_*.py' -v
 
-# Run a single test case or method
-python3 -m unittest test_chessboard_state.FenTests
-python3 -m unittest test_chessboard_state.FenTests.test_after_e4
+# Run a single module / case / method
+python3 -m unittest test_recognition
+python3 -m unittest test_board.FenTests
+python3 -m unittest test_board.FenTests.test_after_e4
 ```
+
+## Design
+
+The code is programmed to interfaces (`interfaces.py`) so implementations are
+swappable: how setup is obtained (`GuiSetupProvider`, `PromptSetupProvider`,
+`MockSetupProvider`), how frames are supplied (`ScreenFrameSource`,
+`MockFrameSource`), and how images are matched (`NumpyImageBackend`,
+`MockImageBackend`). This is what lets the program be verified against
+generated positions evolving over time without any GUI or screenshotting.
