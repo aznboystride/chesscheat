@@ -17,7 +17,7 @@ any of those change.
 
 - Python 3.8+
 - A real display (the tool captures the screen and cannot run headless)
-- Python modules: `mss`, `numpy`, `opencv-python` (see `requirements.txt`)
+- Python modules: `mss`, `numpy` (see `requirements.txt`)
 
 ## Installation
 
@@ -45,13 +45,17 @@ the **starting position**:
 python3 chessboard_state.py
 ```
 
-The program will prompt you for:
+The program opens a small GUI to configure itself:
 
-1. **The bounding box of the board** — the top-left and bottom-right screen
-   coordinates (`x y`) of the board area. Tip: hover your mouse over a corner
-   and note its pixel coordinates.
-2. **Which side you are playing** — `w` (white) or `b` (black). This sets the
+1. **Pick your side** — a window with **White** / **Black** buttons sets the
    board orientation.
+2. **Select the board area** — the screen dims into a fullscreen overlay with
+   a crosshair that tracks your cursor and shows live coordinates. Click the
+   board's **top-left** corner, then its **bottom-right** corner. Press
+   `Escape` at any time to cancel.
+
+(If no display or Tk is available, it falls back to text prompts for the side
+and the corner coordinates.)
 
 After you confirm calibration, it loops: screenshotting the board, classifying
 all 64 squares, and reprinting the position whenever it changes, for example:
@@ -75,14 +79,26 @@ Press `Ctrl+C` to stop.
 
 ## Tests
 
-The pure board logic (coordinate mapping, labels, rendering, FEN) is unit
-tested and does not require the vision dependencies:
+The whole suite runs with **no** third-party dependencies installed: the board
+logic is pure, and recognition is tested end-to-end through mock
+implementations of the interfaces (synthetic board images fed through the real
+matching algorithm), so no GUI, screen, or numpy is required.
 
 ```bash
 # Run the full suite
-python3 -m unittest test_chessboard_state -v
+python3 -m unittest discover -p 'test_*.py' -v
 
-# Run a single test case or method
-python3 -m unittest test_chessboard_state.FenTests
-python3 -m unittest test_chessboard_state.FenTests.test_after_e4
+# Run a single module / case / method
+python3 -m unittest test_recognition
+python3 -m unittest test_board.FenTests
+python3 -m unittest test_board.FenTests.test_after_e4
 ```
+
+## Design
+
+The code is programmed to interfaces (`interfaces.py`) so implementations are
+swappable: how setup is obtained (`GuiSetupProvider`, `PromptSetupProvider`,
+`MockSetupProvider`), how frames are supplied (`ScreenFrameSource`,
+`MockFrameSource`), and how images are matched (`NumpyImageBackend`,
+`MockImageBackend`). This is what lets the program be verified against
+generated positions evolving over time without any GUI or screenshotting.
