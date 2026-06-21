@@ -26,4 +26,4 @@ echo
 echo "Done. Activate the environment with:"
 echo "    source ${VENV_DIR}/bin/activate"
 echo "Then run the reader with:"
-echo "    python3 chessboard_state.py"
+echo "    python3 -m chesscheat"

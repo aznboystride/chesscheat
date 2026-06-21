@@ -16,15 +16,15 @@ matching, and prints the live board state as text (with a canonical FEN).
 source venv/bin/activate
 
 # Run the live reader (needs a real display)
-python3 chessboard_state.py
+python3 -m chesscheat
 
 # Run the whole test suite (pure logic + mock pipeline; needs no deps)
-python3 -m unittest discover -p 'test_*.py' -v
+python3 -m unittest discover -s tests -t . -v
 
 # Run a single test module / case / method
-python3 -m unittest test_recognition
-python3 -m unittest test_board.FenTests
-python3 -m unittest test_board.FenTests.test_after_e4
+python3 -m unittest tests.test_recognition
+python3 -m unittest tests.test_board.FenTests
+python3 -m unittest tests.test_board.FenTests.test_after_e4
 ```
 
 There is no build step or linter config. Runtime dependencies (`mss`,
@@ -53,11 +53,32 @@ See `README.md` for end-user install/run instructions.
 
 ## Architecture
 
-The code is **programmed to interfaces** (`interfaces.py`, ABCs) so real and
-mock parts are interchangeable. The app loop depends only on the abstractions;
-concrete implementations are injected.
+Source lives in the `chesscheat/` package; tests in `tests/`. The code is
+**programmed to interfaces** (`chesscheat/interfaces/`, ABCs) so real and mock
+parts are interchangeable. The app loop depends only on the abstractions;
+concrete implementations are injected. **One class per file**, grouped into
+subpackages whose `__init__.py` re-exports the public names (so
+`from chesscheat.providers import GuiSetupProvider` works). Function-only
+modules (`board`, `app`, `gui/dialogs`, `capture/screenshot`,
+`mocks/synthetic_image`) are kept whole rather than split.
 
-### Interfaces (`interfaces.py`)
+### Package map
+
+```
+chesscheat/
+  app.py            run() loop + main() wiring (functions)
+  board.py          pure logic (functions, no classes)
+  __main__.py       `python3 -m chesscheat` entry point
+  interfaces/       SetupProvider, FrameSource, ImageBackend, BoardRecognizer
+  recognition/      TemplateBoardRecognizer, NumpyImageBackend
+  providers/        Gui/Prompt/Fallback SetupProvider, ScreenFrameSource
+  mocks/            Mock{SetupProvider,FrameSource,ImageBackend}, synthetic_image
+  capture/          screenshot
+  gui/              dialogs (select_side, select_box)
+tests/              test_board, test_recognition
+```
+
+### Interfaces (`chesscheat/interfaces/`)
 
 - `SetupProvider` — `select_side()`, `select_box()` (the user's config).
 - `FrameSource` — `grab()` returns the next board image; may raise
@@ -67,7 +88,7 @@ concrete implementations are injected.
   backend and a pure-Python mock backend.
 - `BoardRecognizer` — `calibrate(image, playing_white)`, `read(image)`.
 
-### Core logic (`board.py`) — dependency-free, the source of truth
+### Core logic (`chesscheat/board.py`) — dependency-free, the source of truth
 
 `square_coord`, `start_label`, `is_light`, `starting_board`, `render`,
 `to_fen`. **Two coordinate spaces**: screen cells are `(row, col)` with row 0
@@ -75,7 +96,7 @@ at the top; chess coords are `(file_idx 0=a, rank 1..8)`. `square_coord` is the
 single place orientation (white vs black) is handled. `to_fen` always emits the
 canonical white-view FEN regardless of perspective.
 
-### Recognition (`recognition.py`)
+### Recognition (`chesscheat/recognition/`)
 
 - `TemplateBoardRecognizer(backend)` — the algorithm: **calibrate from the
   starting position.** There are no bundled piece images; the first frame must
@@ -91,30 +112,30 @@ canonical white-view FEN regardless of perspective.
 
 ### Real I/O implementations
 
-- `screenshot.py` — fast capture; one reused module-level `mss()` instance
-  (`_sct`). Do not recreate it per call.
-- `gui.py` — tkinter setup UI: White/Black buttons and a crosshair overlay to
-  click the two corners. tkinter imported lazily.
-- `providers.py` — `GuiSetupProvider`, `PromptSetupProvider`,
+- `chesscheat/capture/screenshot.py` — fast capture; one reused module-level
+  `mss()` instance (`_sct`). Do not recreate it per call.
+- `chesscheat/gui/dialogs.py` — tkinter setup UI: White/Black buttons and a
+  crosshair overlay to click the two corners. tkinter imported lazily.
+- `chesscheat/providers/` — `GuiSetupProvider`, `PromptSetupProvider`,
   `FallbackSetupProvider` (GUI → prompt on error; a GUI *cancel* raises
   `SystemExit`, which propagates and quits), and `ScreenFrameSource`.
 
-### Mocks (`mocks.py`) — dependency-free, enable testing the whole pipeline
+### Mocks (`chesscheat/mocks/`) — dependency-free, test the whole pipeline
 
 `MockSetupProvider`, `MockFrameSource` (scripted frames), `render_mock_image`
 (board map → synthetic grayscale image with a distinct per-piece pattern, plus
 a square-colour tint that matching ignores), and `MockImageBackend` (same
 normalised-correlation logic as the real backend, in pure Python).
 
-### App loop (`chessboard_state.py`)
+### App loop (`chesscheat/app.py`)
 
 `run(setup, make_frame_source, recognizer, *, on_board, before_calibrate, ...)`
-is the entry point's heart, wired only to interfaces: get side+box → build
-frame source → calibrate from first frame → report each subsequent frame via
-`on_board`. `main` injects the real implementations; `test_recognition.py`
-injects mocks to verify positions evolving over time are recognised exactly.
+is the heart, wired only to interfaces: get side+box → build frame source →
+calibrate from first frame → report each subsequent frame via `on_board`.
+`main` injects the real implementations; `tests/test_recognition.py` injects
+mocks to verify positions evolving over time are recognised exactly.
 
-### Tests
+### Tests (`tests/`)
 
 - `test_board.py` — pure logic.
 - `test_recognition.py` — the real `TemplateBoardRecognizer` over synthetic
@@ -123,7 +144,10 @@ injects mocks to verify positions evolving over time are recognised exactly.
 
 ### Import boundary (important)
 
-Keep heavy/IO deps (`numpy`, `mss`, tkinter, `screenshot`) imported **lazily**
-inside the methods/functions that use them (see `recognition.NumpyImageBackend`,
-`providers`, `gui`). `board.py`, `interfaces.py`, `mocks.py` and the `run` loop
-must stay importable dependency-free so the suite runs anywhere.
+Keep heavy/IO deps (`numpy`, `mss`, tkinter, `chesscheat.capture`) imported
+**lazily** inside the methods/functions that use them (see
+`recognition/numpy_image_backend.py`, `providers/`, `gui/dialogs.py`). The
+`board`, `interfaces`, `mocks` packages and the `run` loop must stay importable
+dependency-free so the suite runs anywhere. Subpackage `__init__.py` files must
+likewise avoid eager heavy imports (e.g. `capture/__init__.py` pulls in numpy,
+so depend on it only behind a lazy import).
