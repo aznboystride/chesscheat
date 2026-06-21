@@ -14,11 +14,20 @@ class SetupProvider(ABC):
 
     @abstractmethod
     def select_side(self):
-        """Return True if the user plays white, False if black."""
+        """Ask which side the user is playing.
+
+        Returns:
+            True if the user plays white, False if black.
+        """
 
     @abstractmethod
     def select_box(self):
-        """Return the board's bounding box as ``(x1, y1, x2, y2)``."""
+        """Ask for the board's screen region.
+
+        Returns:
+            The bounding box as an ``(x1, y1, x2, y2)`` tuple of absolute
+            screen coordinates (top-left and bottom-right).
+        """
 
 
 class FrameSource(ABC):
@@ -28,8 +37,13 @@ class FrameSource(ABC):
     def grab(self):
         """Return the next board image.
 
-        May raise ``StopIteration`` to signal that no more frames are
-        available (used by finite/mock sources; live sources never stop).
+        Returns:
+            An image of the board, in whatever representation the paired
+            ``ImageBackend`` expects.
+
+        Raises:
+            StopIteration: If no more frames are available. Used by
+                finite/mock sources; live sources never stop.
         """
 
 
@@ -42,15 +56,39 @@ class ImageBackend(ABC):
 
     @abstractmethod
     def get_square(self, image, row, col):
-        """Crop the (row, col) square's comparable region from an image."""
+        """Crop one square's comparable region from a board image.
+
+        Args:
+            image: A full board image from a ``FrameSource``.
+            row: Screen grid row, 0 at the top.
+            col: Screen grid column, 0 at the left.
+
+        Returns:
+            The cropped square region, in the backend's image representation.
+        """
 
     @abstractmethod
     def feature(self, patch):
-        """Reduce a square crop to a comparable feature vector."""
+        """Reduce a square crop to a comparable feature.
+
+        Args:
+            patch: A square region from ``get_square``.
+
+        Returns:
+            A feature value comparable via ``similarity``.
+        """
 
     @abstractmethod
     def similarity(self, feature_a, feature_b):
-        """Return a similarity score between two features (higher = closer)."""
+        """Score how alike two features are.
+
+        Args:
+            feature_a: A feature from ``feature``.
+            feature_b: Another feature from ``feature``.
+
+        Returns:
+            A similarity score where higher means more alike.
+        """
 
 
 class BoardRecognizer(ABC):
@@ -58,8 +96,21 @@ class BoardRecognizer(ABC):
 
     @abstractmethod
     def calibrate(self, image, playing_white):
-        """Learn templates from an image of the starting position."""
+        """Learn piece templates from an image of the starting position.
+
+        Args:
+            image: A board image showing the standard starting position.
+            playing_white: True if the board is shown from white's
+                perspective, False for black's.
+        """
 
     @abstractmethod
     def read(self, image):
-        """Classify every square of ``image`` into a board map."""
+        """Classify every square of an image into a board map.
+
+        Args:
+            image: A board image to recognise.
+
+        Returns:
+            A ``{(file_idx, rank): label}`` map of all 64 squares.
+        """

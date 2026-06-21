@@ -16,12 +16,23 @@ def run(setup, make_frame_source, recognizer, *, on_board,
         before_calibrate=lambda: None, interval=0.0, sleeper=time.sleep):
     """Drive the read loop using injected interface implementations.
 
-    - ``setup``: a ``SetupProvider``.
-    - ``make_frame_source``: ``box -> FrameSource`` factory.
-    - ``recognizer``: a ``BoardRecognizer``.
-    - ``on_board``: callback ``(board_map, playing_white)`` per read frame.
-    - ``before_calibrate``: side-effect hook run just before calibration
-      (e.g. wait for the user to set up the starting position).
+    Asks ``setup`` for the side and box, builds a frame source, calibrates the
+    recognizer from the first frame (the starting position) and then reports
+    every subsequent frame until the source is exhausted or interrupted.
+
+    Args:
+        setup: A ``SetupProvider`` for the side and bounding box.
+        make_frame_source: A ``box -> FrameSource`` factory.
+        recognizer: A ``BoardRecognizer`` to calibrate and read with.
+        on_board: Callback invoked as ``(board_map, playing_white)`` for each
+            read frame.
+        before_calibrate: Side-effect hook run just before calibration, e.g.
+            to wait for the user to set up the starting position.
+        interval: Seconds to sleep between frames; 0 disables sleeping.
+        sleeper: Sleep function, injectable for testing.
+
+    Returns:
+        The ``playing_white`` boolean chosen via ``setup``.
     """
     playing_white = setup.select_side()
     box = setup.select_box()
@@ -45,7 +56,12 @@ def run(setup, make_frame_source, recognizer, *, on_board,
 
 
 def _console_printer():
-    """A de-duplicating ``on_board`` callback that prints board + FEN."""
+    """Build a de-duplicating ``on_board`` callback that prints board + FEN.
+
+    Returns:
+        A ``(board_map, playing_white)`` callback that clears the screen and
+        reprints only when the position changes from the previous frame.
+    """
     last = [None]
 
     def show(board_map, playing_white):
@@ -59,6 +75,7 @@ def _console_printer():
 
 
 def main():
+    """Wire the real implementations and run the live reader."""
     from providers import (GuiSetupProvider, PromptSetupProvider,
                            FallbackSetupProvider, ScreenFrameSource)
     from recognition import TemplateBoardRecognizer, NumpyImageBackend
