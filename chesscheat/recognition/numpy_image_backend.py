@@ -44,7 +44,8 @@ class NumpyImageBackend(ImageBackend):
         brightness_weight: Weight of the brightness term in ``similarity``.
     """
 
-    def __init__(self, size=48, margin=0.12, brightness_weight=0.5):
+    def __init__(self, size=48, margin=0.12, brightness_weight=0.5,
+                 recolor_tol=40):
         """Initialise the backend.
 
         Args:
@@ -53,10 +54,13 @@ class NumpyImageBackend(ImageBackend):
                 borders and coordinate labels.
             brightness_weight: Weight of the brightness-closeness term relative
                 to the shape-correlation term in ``similarity``.
+            recolor_tol: Max per-pixel colour distance to ``from_empty`` for a
+                pixel to count as background in ``recolor``.
         """
         self.size = size
         self.margin = margin
         self.brightness_weight = brightness_weight
+        self.recolor_tol = recolor_tol
 
     def get_square(self, image, row, col):
         """Crop the inner region of one square from a numpy board image.
@@ -118,3 +122,39 @@ class NumpyImageBackend(ImageBackend):
         shape_b, mean_b = feature_b
         corr = float(np.dot(shape_a, shape_b))
         return corr + self.brightness_weight * (1.0 - abs(mean_a - mean_b))
+
+    def recolor(self, patch, from_empty, to_empty):
+        """Repaint background pixels from one empty colour to another.
+
+        The empty crops are assumed near-uniform (assumption: a colour's empty
+        squares look identical), so their average colour stands in for the
+        whole square. Pixels of ``patch`` within ``recolor_tol`` of the source
+        colour are repainted with the target colour; the rest (the piece) are
+        kept. Shape-independent, so it tolerates squares differing by a pixel.
+
+        Args:
+            patch: A square crop with a piece on a ``from_empty`` square.
+            from_empty: A crop of an empty square of the current colour.
+            to_empty: A crop of an empty square of the target colour.
+
+        Returns:
+            A numpy array like ``patch`` with the background repainted.
+        """
+        import numpy as np
+
+        arr = np.asarray(patch, dtype=np.int64)
+        from_color = np.asarray(from_empty, dtype=np.float64).reshape(
+            -1, arr.shape[-1]).mean(axis=0) if arr.ndim == 3 else \
+            float(np.asarray(from_empty, dtype=np.float64).mean())
+        to_color = np.asarray(to_empty, dtype=np.float64).reshape(
+            -1, arr.shape[-1]).mean(axis=0) if arr.ndim == 3 else \
+            float(np.asarray(to_empty, dtype=np.float64).mean())
+
+        out = arr.copy()
+        if arr.ndim == 3:
+            mask = np.abs(arr - from_color).sum(axis=-1) <= self.recolor_tol
+            out[mask] = np.round(to_color).astype(np.int64)
+        else:
+            mask = np.abs(arr - from_color) <= self.recolor_tol
+            out[mask] = int(round(to_color))
+        return out

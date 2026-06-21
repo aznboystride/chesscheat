@@ -83,9 +83,10 @@ tests/              test_board, test_recognition
 - `SetupProvider` — `select_side()`, `select_box()` (the user's config).
 - `FrameSource` — `grab()` returns the next board image; may raise
   `StopIteration` when a finite source is exhausted.
-- `ImageBackend` — `get_square` / `feature` / `similarity`. Abstracts the image
-  representation so the recognition *algorithm* is shared by a real numpy
-  backend and a pure-Python mock backend.
+- `ImageBackend` — `get_square` / `feature` / `similarity` / `recolor`.
+  Abstracts the image representation so the recognition *algorithm* is shared
+  by a real numpy backend and a pure-Python mock backend. `recolor` repaints a
+  square's empty background from one colour to another (for template synthesis).
 - `BoardRecognizer` — `calibrate(image, playing_white)`, `read(image)`.
 
 ### Core logic (`chesscheat/board.py`) — dependency-free, the source of truth
@@ -98,17 +99,28 @@ canonical white-view FEN regardless of perspective.
 
 ### Recognition (`chesscheat/recognition/`)
 
+Works on **any** board (any theme, any pieces — they need not look like chess
+pieces) given the assumptions: squares evenly spaced; each colour's squares
+look identical everywhere; each piece looks identical wherever it is placed.
+
 - `TemplateBoardRecognizer(backend)` — the algorithm: **calibrate from the
   starting position.** There are no bundled piece images; the first frame must
-  be the standard start position, from which one template per square is
-  captured (so every piece type and empty square gets a reference). `read`
-  classifies each later square by nearest template. The same algorithm runs
-  with the real and the mock backend.
-- `NumpyImageBackend` — real backend. `feature` is a mean-subtracted,
-  unit-normalised grayscale vector, so `similarity` (a dot product) equals the
-  normalised cross-correlation coefficient (OpenCV's `TM_CCOEFF_NORMED`, but
-  numpy-only — there is **no `cv2` dependency**). Templates are tied to the
-  current board theme/size/position; recalibrate if any change.
+  be the standard start position, from which it learns how each piece and each
+  empty square looks. Matching is **colour-aware**: a square's colour is known
+  from its coordinates, so a square is only compared against templates for that
+  colour (no cross-colour confusion). Because the start position shows kings
+  and queens on a single colour, the missing piece-on-opposite-colour templates
+  are **synthesised** (via the backend's `recolor`, repainting the empty
+  background to the other colour) so every piece is recognisable on either
+  colour. The same algorithm runs with the real and the mock backend.
+- `NumpyImageBackend` — real backend. `feature` is a `(shape, mean)` pair:
+  `shape` is a mean-subtracted, unit-normalised grayscale vector (so its dot
+  product is the normalised cross-correlation coefficient, OpenCV's
+  `TM_CCOEFF_NORMED`, but numpy-only — **no `cv2`**), and `mean` is brightness,
+  which keeps *flat* (empty) squares distinguishable (mean-subtraction alone
+  zeroes them). `recolor` swaps a piece's background colour using the average
+  empty colours. Templates are tied to the current board theme/size/position;
+  recalibrate if any change.
 
 ### Real I/O implementations
 
@@ -146,6 +158,10 @@ mocks to verify positions evolving over time are recognised exactly.
   `fixtures/generate_boards.py`) for the opening 1.e4 c5 2.Nf3. Needs numpy +
   Pillow (`requirements-dev.txt`); `skipUnless`-guarded so it skips when those
   are absent.
+- `test_general_boards.py` — the generality guarantee: an arbitrary colour
+  theme with non-chess-looking pieces, through positions where kings/queens
+  cross onto the opposite-coloured square (the synthesis path). Renders boards
+  with numpy directly; `skipUnless(numpy)`-guarded.
 
 Note `NumpyImageBackend`'s feature is a `(shape, mean)` pair: mean-subtracted
 correlation discriminates pieces across square colours, while the brightness

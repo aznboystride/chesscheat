@@ -45,3 +45,24 @@ class ImageBackend(ABC):
         Returns:
             A similarity score where higher means more alike.
         """
+
+    @abstractmethod
+    def recolor(self, patch, from_empty, to_empty):
+        """Repaint a square's background from one empty colour to another.
+
+        Used to synthesise how a piece would look on a square of the opposite
+        colour from how it looks on its calibration square: background pixels
+        (those matching ``from_empty``) are repainted with ``to_empty`` while
+        the piece's own pixels are kept. Relies on the assumptions that empty
+        squares of a colour are uniform and a piece composites over them
+        identically everywhere.
+
+        Args:
+            patch: A square crop containing a piece on a ``from_empty`` square.
+            from_empty: A crop of an empty square of the piece's current colour.
+            to_empty: A crop of an empty square of the target colour.
+
+        Returns:
+            A patch of the same form as ``patch`` with the background repainted.
+        """
+

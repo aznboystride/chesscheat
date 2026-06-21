@@ -7,11 +7,22 @@ matching, and prints the live board state as text along with a canonical FEN.
 ## How it works
 
 There are no bundled piece images. On startup the board must be in the
-standard starting position — the program captures one reference template per
-square (so every piece type and empty square gets a reference), then matches
-later frames against those templates. Because the templates are tied to the
-current board theme, size, and position, you should recalibrate (restart) if
-any of those change.
+standard starting position — from that single image the program learns how
+each piece and each empty square looks, then extrapolates to any later
+configuration. Because the templates are tied to the current board theme, size,
+and position, you should recalibrate (restart) if any of those change.
+
+It works on **any** board, not just a particular site or piece set, as long as:
+
+- the squares are evenly spaced;
+- each colour's squares look identical everywhere on the board;
+- each piece looks identical on every square it occupies.
+
+The pieces need not look like traditional chess pieces — only be consistent.
+Matching is colour-aware (a square is only compared against templates of its
+own colour), and the piece-on-opposite-colour appearances that the starting
+position never shows (kings and queens) are synthesised from it by repainting
+the empty background, so any later position is read correctly.
 
 ## Requirements
 
