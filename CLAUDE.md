@@ -44,6 +44,12 @@ See `README.md` for end-user install/run instructions.
   generators, `functools`/`itertools` — and other Python features that
   support this style, in preference to imperative accumulation where it reads
   clearly.
+- Document code with [Google Style docstrings](https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings).
+  Every module, public class, and public function/method gets a docstring with
+  a one-line summary; use `Args:`, `Returns:`, `Raises:`, and `Attributes:`
+  sections where they apply. Omit a section when it adds nothing (e.g. no
+  `Args:` for a no-argument function, no `Returns:` for `None`). Document
+  abstract methods on the interface so implementations inherit the contract.
 
 ## Architecture
 

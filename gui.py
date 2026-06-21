@@ -13,7 +13,14 @@ stays importable on machines without Tk (e.g. for the unit tests).
 
 
 def select_side():
-    """Show White/Black buttons; return True for white, False for black."""
+    """Show a window with White/Black buttons.
+
+    Returns:
+        True if the user clicks White, False if Black.
+
+    Raises:
+        SystemExit: If the window is closed without choosing.
+    """
     import tkinter as tk
 
     choice = {"white": None}
@@ -47,10 +54,17 @@ def select_side():
 
 
 def select_box():
-    """Overlay the screen; let the user click two corners.
+    """Overlay the screen and let the user click two corners.
 
-    Returns ``(x1, y1, x2, y2)`` in absolute screen coordinates, normalised so
-    the first pair is the top-left and the second the bottom-right.
+    A crosshair tracks the cursor and shows live coordinates; the user clicks
+    the top-left corner, then the bottom-right.
+
+    Returns:
+        The board's bounding box as ``(x1, y1, x2, y2)`` in absolute screen
+        coordinates, normalised so the first pair is the top-left.
+
+    Raises:
+        SystemExit: If the selection is cancelled (e.g. via Escape).
     """
     import tkinter as tk
 
