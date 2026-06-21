@@ -13,10 +13,9 @@ images required.
 
 import time
 
-import cv2
-import numpy as np
-
-from screenshot import screenshot
+# cv2 and screenshot are imported lazily inside the functions that need them
+# so the pure board logic (coordinates, rendering, FEN) can be imported and
+# unit-tested without the heavy capture/vision dependencies installed.
 
 SZ = 48          # templates / squares are normalised to SZ x SZ
 MARGIN = 0.12    # fraction trimmed from each side of a square before matching
@@ -85,6 +84,8 @@ def get_square(board_img, row, col):
 
 def prep(cell):
     """Normalise a square to a fixed-size grayscale patch for matching."""
+    import cv2
+
     if cell.shape[2] == 4:
         gray = cv2.cvtColor(cell, cv2.COLOR_BGRA2GRAY)
     else:
@@ -106,6 +107,8 @@ def build_templates(board_img, playing_white):
 
 def classify(patch, templates):
     """Return the label of the best-matching template for a square."""
+    import cv2
+
     best_label, best_score = ".", -2.0
     for label, tmpl in templates:
         score = cv2.matchTemplate(patch, tmpl, cv2.TM_CCOEFF_NORMED)[0, 0]
@@ -161,6 +164,8 @@ def to_fen(board):
 
 
 def main():
+    from screenshot import screenshot
+
     print("=== Live Chessboard Reader ===")
     print("Make sure the board is in the standard starting position.\n")
     x1, y1, x2, y2 = prompt_box()
