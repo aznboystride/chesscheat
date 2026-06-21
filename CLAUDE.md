@@ -11,7 +11,11 @@ matching, and prints the live board state as text (with a canonical FEN).
 ## Commands
 
 ```bash
-# Run the live reader (needs a real display + the deps below)
+# One-time setup: create ./venv and install deps from requirements.txt
+./setup.sh
+source venv/bin/activate
+
+# Run the live reader (needs a real display)
 python3 chessboard_state.py
 
 # Run the unit tests
@@ -22,9 +26,11 @@ python3 -m unittest test_chessboard_state.FenTests
 python3 -m unittest test_chessboard_state.FenTests.test_after_e4
 ```
 
-There is no build step, linter config, or requirements file. Runtime
-dependencies (`opencv-python`, `mss`, `numpy`) must be installed manually:
-`pip install opencv-python mss numpy`.
+There is no build step or linter config. Runtime dependencies
+(`opencv-python`, `mss`, `numpy`) live in `requirements.txt`; `setup.sh`
+builds a `venv/` and installs them (honors a `PYTHON` env var override).
+Installing manually works too: `pip install -r requirements.txt`. See
+`README.md` for end-user install/run instructions.
 
 ## Coding preferences
 
