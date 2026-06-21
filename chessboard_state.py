@@ -168,8 +168,15 @@ def main():
 
     print("=== Live Chessboard Reader ===")
     print("Make sure the board is in the standard starting position.\n")
-    x1, y1, x2, y2 = prompt_box()
-    playing_white = prompt_side()
+
+    try:
+        import gui
+        playing_white = gui.select_side()
+        x1, y1, x2, y2 = gui.select_box()
+    except Exception as exc:  # no display / Tk unavailable -> text fallback
+        print(f"GUI unavailable ({exc}); falling back to text prompts.\n")
+        playing_white = prompt_side()
+        x1, y1, x2, y2 = prompt_box()
 
     input("\nPosition the board in the starting position, then press Enter "
           "to calibrate...")

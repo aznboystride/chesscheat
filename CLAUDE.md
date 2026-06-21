@@ -52,9 +52,15 @@ Three modules, layered capture → recognition → presentation:
   returns a BGRA numpy array. Reusing the one `mss` instance is the main
   speed lever — do not recreate it per call.
 
-- `chessboard_state.py` — the application. Prompts for the board's bounding
-  box and which side the user plays, then loops: screenshot → classify 64
-  squares → render. Key design points:
+- `gui.py` — tkinter front-end for setup. `select_side()` shows White/Black
+  buttons; `select_box()` overlays a semi-transparent fullscreen window with a
+  crosshair to click the board's two corners (returns absolute screen coords).
+  tkinter is imported lazily inside each function. `main` uses these but falls
+  back to the text `prompt_side`/`prompt_box` if Tk/display is unavailable.
+
+- `chessboard_state.py` — the application. Gets the board's bounding box and
+  which side the user plays (via `gui`, else text prompts), then loops:
+  screenshot → classify 64 squares → render. Key design points:
   - **Calibration from the starting position.** There are no bundled piece
     images. On startup the board must be in the standard starting position;
     `build_templates` captures one template per square and labels it using
