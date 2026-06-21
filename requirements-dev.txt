@@ -1,0 +1,5 @@
+# Test-only dependencies (the app itself needs just requirements.txt).
+# Pillow is used by tests/test_real_images.py to decode the board fixtures and
+# by tests/fixtures/generate_boards.py to (re)build them.
+-r requirements.txt
+Pillow

@@ -141,6 +141,17 @@ mocks to verify positions evolving over time are recognised exactly.
 - `test_recognition.py` — the real `TemplateBoardRecognizer` over synthetic
   images via `MockImageBackend`, driven through `run`. Both run with no
   third-party deps installed.
+- `test_real_images.py` — the real `NumpyImageBackend` over real board images
+  (`fixtures/boards/`, composed from the Wikipedia piece set by
+  `fixtures/generate_boards.py`) for the opening 1.e4 c5 2.Nf3. Needs numpy +
+  Pillow (`requirements-dev.txt`); `skipUnless`-guarded so it skips when those
+  are absent.
+
+Note `NumpyImageBackend`'s feature is a `(shape, mean)` pair: mean-subtracted
+correlation discriminates pieces across square colours, while the brightness
+`mean` keeps *flat* (empty) squares distinguishable — without it, empty squares
+correlate with nothing and get misread. The synthetic mock images never exposed
+this because their empty squares carry a pattern; the real-image test does.
 
 ### Import boundary (important)
 
