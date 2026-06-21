@@ -68,3 +68,29 @@ class MockImageBackend(ImageBackend):
             features.
         """
         return sum(x * y for x, y in zip(feature_a, feature_b))
+
+    def recolor(self, patch, from_empty, to_empty, tol=0):
+        """Repaint background pixels from one empty value to another.
+
+        Synthetic mock pieces fully replace their square rather than
+        compositing over it, so there are usually no background pixels to
+        repaint; this is provided for interface completeness and mirrors the
+        real backend's average-colour swap.
+
+        Args:
+            patch: A square crop as a list of lists of ints.
+            from_empty: An empty-square crop of the current colour.
+            to_empty: An empty-square crop of the target colour.
+            tol: Max absolute distance to the source value to count as
+                background.
+
+        Returns:
+            A list of lists of ints with background values repainted.
+        """
+        def avg(cell):
+            flat = [v for row in cell for v in row]
+            return sum(flat) / len(flat)
+
+        from_value, to_value = avg(from_empty), avg(to_empty)
+        return [[to_value if abs(v - from_value) <= tol else v for v in row]
+                for row in patch]
