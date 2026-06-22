@@ -154,10 +154,11 @@ mocks to verify positions evolving over time are recognised exactly.
   images via `MockImageBackend`, driven through `run`. Both run with no
   third-party deps installed.
 - `test_real_images.py` — the real `NumpyImageBackend` over real board images
-  (`fixtures/boards/`, composed from the Wikipedia piece set by
-  `fixtures/generate_boards.py`) for the opening 1.e4 c5 2.Nf3. Needs numpy +
-  Pillow (`requirements-dev.txt`); `skipUnless`-guarded so it skips when those
-  are absent.
+  for several piece sets (`fixtures/boards/<set>/`: Wikipedia + alpha PNGs from
+  chessboard.js, and lichess's merida rasterised from SVG; each on its own
+  colour theme), composed by `fixtures/generate_boards.py` for the opening
+  1.e4 c5 2.Nf3. Needs numpy + Pillow (`requirements-dev.txt`);
+  `skipUnless`-guarded so it skips when those are absent.
 - `test_general_boards.py` — the generality guarantee: an arbitrary colour
   theme with non-chess-looking pieces, through positions where kings/queens
   cross onto the opposite-coloured square (the synthesis path). Renders boards
