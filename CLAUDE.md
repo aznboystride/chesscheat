@@ -83,7 +83,9 @@ tests/              test_board, test_recognition, test_legal_move_filter, ...
 
 ### Interfaces (`chesscheat/interfaces/`)
 
-- `SetupProvider` — `select_side()`, `select_box()` (the user's config).
+- `SetupProvider` — `select_side()`, `select_box()`, `confirm_box(image)`
+  (the user's config; `confirm_box` shows what the selected region captured
+  and returns False to trigger reselection).
 - `FrameSource` — `grab()` returns the next board image; may raise
   `StopIteration` when a finite source is exhausted.
 - `ImageBackend` — `get_square` / `feature` / `similarity` / `recolor`.
@@ -137,8 +139,13 @@ look identical everywhere; each piece looks identical wherever it is placed.
 
 - `chesscheat/capture/screenshot.py` — fast capture; one reused module-level
   `mss()` instance (`_sct`). Do not recreate it per call.
-- `chesscheat/gui/dialogs.py` — tkinter setup UI: White/Black buttons and a
-  crosshair overlay to click the two corners. tkinter imported lazily.
+- `chesscheat/gui/dialogs.py` — tkinter setup UI: White/Black buttons, a
+  crosshair overlay to click the two corners, and a capture-confirmation
+  dialog (`confirm_box`, image shown via a PPM-encoded `tk.PhotoImage` —
+  `_image_to_ppm`, no Pillow). The overlay is unmapped and the event queue
+  flushed **before** `select_box` returns (plus a short repaint sleep) so
+  nothing lingers over the board blocking the user's clicks or polluting the
+  first capture. tkinter imported lazily.
 - `chesscheat/providers/` — `GuiSetupProvider`, `PromptSetupProvider`,
   `FallbackSetupProvider` (GUI → prompt on error; a GUI *cancel* raises
   `SystemExit`, which propagates and quits), and `ScreenFrameSource`.
@@ -153,8 +160,11 @@ normalised-correlation logic as the real backend, in pure Python).
 ### App loop (`chesscheat/app.py`)
 
 `run(setup, make_frame_source, recognizer, *, on_board, before_calibrate, ...)`
-is the heart, wired only to interfaces: get side+box → build frame source →
-calibrate from first frame → report each subsequent frame via `on_board`.
+is the heart, wired only to interfaces: get side → loop { get box → grab a
+preview frame → `confirm_box` } until confirmed → build a fresh frame source
+(so scripted mock sources restart; the preview grab never consumes the
+calibration frame) → calibrate from first frame → report each subsequent
+frame via `on_board`.
 `main` injects the real implementations; `tests/test_recognition.py` injects
 mocks to verify positions evolving over time are recognised exactly.
 
@@ -184,6 +194,10 @@ mocks to verify positions evolving over time are recognised exactly.
   paints cursor crosses and 50 % highlight tints directly onto the PNGs and
   checks corrupted frames are dropped and genuine moves accepted, for all
   three piece sets. `skipUnless(numpy + Pillow + chess)`-guarded.
+- `test_setup_confirmation.py` — the capture-confirmation step: rejection
+  loops back to reselection, the preview never consumes the calibration
+  frame, prompt y/n and fallback forwarding, and `_image_to_ppm` encoding
+  (grayscale lists dep-free; BGRA/RGB/gray arrays `skipUnless(numpy)`).
 
 Note `NumpyImageBackend`'s feature is a `(shape, mean)` pair: mean-subtracted
 correlation discriminates pieces across square colours, while the brightness

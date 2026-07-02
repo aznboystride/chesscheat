@@ -37,3 +37,26 @@ class PromptSetupProvider(SetupProvider):
         x1, y1 = ask("top-left")
         x2, y2 = ask("bottom-right")
         return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+
+    def confirm_box(self, image):
+        """Report the capture's dimensions and ask y/n to proceed.
+
+        A terminal cannot display the capture itself, so the user is told its
+        pixel size and asked to confirm.
+
+        Args:
+            image: The frame captured from the selected bounding box.
+
+        Returns:
+            True to proceed with this region, False to select it again.
+        """
+        height = len(image)
+        width = len(image[0]) if height else 0
+        while True:
+            answer = input(f"Captured a {width}x{height} region of the screen."
+                           " Proceed? (y/n): ").strip().lower()
+            if answer in ("y", "yes"):
+                return True
+            if answer in ("n", "no"):
+                return False
+            print("  Please answer 'y' or 'n'.")

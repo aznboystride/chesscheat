@@ -1,15 +1,61 @@
 """Tkinter dialogs for configuring the chessboard reader.
 
-Two interactions:
+Three interactions:
 
 - ``select_side()`` pops up a small window with White / Black buttons.
 - ``select_box()`` puts up a semi-transparent fullscreen overlay; the user
   hovers (a crosshair tracks the cursor and shows live screen coordinates)
-  and clicks the board's top-left then bottom-right corner.
+  and clicks the board's top-left then bottom-right corner. The overlay is
+  fully torn down (unmapped and repainted away) before the function returns,
+  so nothing is left covering the board afterwards -- the user can interact
+  with it normally while the reader runs.
+- ``confirm_box(image)`` shows the frame captured from the selected region so
+  the user can check the crop before the reader starts, with **Looks good**
+  / **Reselect** buttons.
 
 tkinter is imported lazily inside each function so the rest of the package
 stays importable on machines without Tk (e.g. for the unit tests).
 """
+
+import time
+
+
+def _image_to_ppm(image):
+    """Encode a captured frame as binary PPM (P6) bytes.
+
+    Tk's ``PhotoImage`` accepts PPM data directly, which lets the preview be
+    shown without Pillow. Handles the representations the frame sources
+    produce: a BGRA numpy array (``mss`` capture), an RGB(A) or grayscale
+    numpy array, or a grayscale list of lists (the mock renderer).
+
+    Args:
+        image: The captured frame.
+
+    Returns:
+        The frame encoded as PPM ``bytes``.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+
+    if np is not None and hasattr(image, "ndim"):
+        arr = np.asarray(image)
+        if arr.ndim == 2:
+            rgb = np.stack([arr] * 3, axis=-1)
+        elif arr.shape[2] == 4:
+            rgb = arr[..., 2::-1]  # mss gives BGRA; flip to RGB
+        else:
+            rgb = arr[..., :3]
+        rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+        h, w = rgb.shape[:2]
+        return f"P6 {w} {h} 255\n".encode() + rgb.tobytes()
+
+    # Pure-Python fallback: a grayscale list of lists.
+    h, w = len(image), len(image[0])
+    body = bytes(max(0, min(255, int(v)))
+                 for row in image for v in row for _ in range(3))
+    return f"P6 {w} {h} 255\n".encode() + body
 
 
 def select_side():
@@ -105,6 +151,17 @@ def select_box():
             sx, sy = start_xy[0]
             canvas.coords(rect, sx, sy, event.x, event.y)
 
+    def dismiss():
+        # Unmap the overlay and flush the event queue *before* destroying it,
+        # so the fullscreen window is really gone from the screen (not merely
+        # scheduled to close) by the time this function returns. Otherwise it
+        # can linger over the board -- blocking the user's clicks -- and show
+        # up in the first captured frame.
+        root.withdraw()
+        root.update_idletasks()
+        root.update()
+        root.destroy()
+
     def on_click(event):
         clicks.append((event.x_root, event.y_root))
         if len(clicks) == 1:
@@ -112,11 +169,11 @@ def select_box():
             canvas.itemconfig(prompt, text=PROMPTS[1])
             canvas.itemconfig(rect, state="normal")
         else:
-            root.destroy()
+            dismiss()
 
     def cancel(_event):
         clicks.clear()
-        root.destroy()
+        dismiss()
 
     canvas.bind("<Motion>", on_motion)
     canvas.bind("<Button-1>", on_click)
@@ -126,5 +183,62 @@ def select_box():
 
     if len(clicks) < 2:
         raise SystemExit("Box selection cancelled.")
+    time.sleep(0.2)  # let the desktop repaint before the region is captured
     (x1, y1), (x2, y2) = clicks
     return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+
+
+def confirm_box(image):
+    """Show the captured region and ask whether it looks right.
+
+    Displays ``image`` (the frame grabbed from the selected bounding box) in
+    a window with **Looks good** and **Reselect** buttons, so the user can
+    verify the crop covers exactly the board before the reader starts.
+
+    Args:
+        image: The frame captured from the selected bounding box.
+
+    Returns:
+        True if the user confirms the capture, False to reselect the region.
+
+    Raises:
+        SystemExit: If the window is closed without choosing.
+    """
+    import tkinter as tk
+
+    answer = {"ok": None}
+
+    root = tk.Tk()
+    root.title("Confirm the captured board")
+
+    tk.Label(root, text="Is this exactly the board?",
+             font=("Helvetica", 13)).pack(pady=(14, 8))
+
+    photo = tk.PhotoImage(master=root, data=_image_to_ppm(image))
+    # Shrink an oversized capture so the dialog fits comfortably on screen.
+    max_w = int(root.winfo_screenwidth() * 0.7)
+    max_h = int(root.winfo_screenheight() * 0.7)
+    factor = max(1, -(-photo.width() // max_w), -(-photo.height() // max_h))
+    if factor > 1:
+        photo = photo.subsample(factor, factor)
+    tk.Label(root, image=photo, borderwidth=2, relief="solid").pack(padx=14)
+
+    def pick(ok):
+        answer["ok"] = ok
+        root.destroy()
+
+    buttons = tk.Frame(root)
+    buttons.pack(pady=14)
+    tk.Button(buttons, text="Looks good", width=12, height=2,
+              command=lambda: pick(True)).pack(side="left", padx=10)
+    tk.Button(buttons, text="Reselect", width=12, height=2,
+              command=lambda: pick(False)).pack(side="left", padx=10)
+
+    root.bind("<Escape>", lambda e: root.destroy())
+    root.eval("tk::PlaceWindow . center")
+    root.focus_force()
+    root.mainloop()
+
+    if answer["ok"] is None:
+        raise SystemExit("Capture confirmation cancelled.")
+    return answer["ok"]

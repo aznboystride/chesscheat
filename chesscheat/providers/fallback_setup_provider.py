@@ -24,11 +24,12 @@ class FallbackSetupProvider(SetupProvider):
         self.primary = primary
         self.secondary = secondary
 
-    def _try(self, method):
+    def _try(self, method, *args):
         """Call ``method`` on the primary provider, else on the secondary.
 
         Args:
             method: Name of the ``SetupProvider`` method to invoke.
+            *args: Positional arguments forwarded to the method.
 
         Returns:
             The primary provider's result, or the secondary's if the primary
@@ -39,10 +40,10 @@ class FallbackSetupProvider(SetupProvider):
                 cancelling quits rather than falling back to prompts.
         """
         try:
-            return getattr(self.primary, method)()
+            return getattr(self.primary, method)(*args)
         except Exception as exc:
             print(f"GUI unavailable ({exc}); using text prompt.")
-            return getattr(self.secondary, method)()
+            return getattr(self.secondary, method)(*args)
 
     def select_side(self):
         """Select the side via the primary provider, else the secondary.
@@ -59,3 +60,14 @@ class FallbackSetupProvider(SetupProvider):
             The bounding box as ``(x1, y1, x2, y2)``.
         """
         return self._try("select_box")
+
+    def confirm_box(self, image):
+        """Confirm the capture via the primary provider, else the secondary.
+
+        Args:
+            image: The frame captured from the selected bounding box.
+
+        Returns:
+            True to proceed with this region, False to select it again.
+        """
+        return self._try("confirm_box", image)

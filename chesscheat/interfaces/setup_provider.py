@@ -22,3 +22,15 @@ class SetupProvider(ABC):
             The bounding box as an ``(x1, y1, x2, y2)`` tuple of absolute
             screen coordinates (top-left and bottom-right).
         """
+
+    @abstractmethod
+    def confirm_box(self, image):
+        """Show what the selected region captured and ask to proceed.
+
+        Args:
+            image: The frame captured from the selected bounding box, in
+                whatever representation the pipeline's frame source produces.
+
+        Returns:
+            True to proceed with this region, False to select it again.
+        """

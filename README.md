@@ -75,10 +75,15 @@ The program opens a small GUI to configure itself:
 2. **Select the board area** — the screen dims into a fullscreen overlay with
    a crosshair that tracks your cursor and shows live coordinates. Click the
    board's **top-left** corner, then its **bottom-right** corner. Press
-   `Escape` at any time to cancel.
+   `Escape` at any time to cancel. The overlay disappears completely once the
+   corners are chosen — it never blocks the board while the reader runs, so
+   you can click and move pieces normally.
+3. **Confirm the capture** — a window shows exactly what was captured from
+   the selected region. Click **Looks good** to proceed, or **Reselect** to
+   pick the corners again.
 
-(If no display or Tk is available, it falls back to text prompts for the side
-and the corner coordinates.)
+(If no display or Tk is available, it falls back to text prompts for the side,
+the corner coordinates, and a y/n capture confirmation.)
 
 After you confirm calibration, it loops: screenshotting the board, classifying
 all 64 squares, and reprinting the position whenever it changes, for example:
