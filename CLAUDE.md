@@ -77,7 +77,7 @@ chesscheat/
   providers/        Gui/Prompt/Fallback SetupProvider, ScreenFrameSource
   mocks/            Mock{SetupProvider,FrameSource,ImageBackend}, synthetic_image
   capture/          screenshot
-  gui/              dialogs (select_side, select_box)
+  gui/              dialogs (select_side, select_box, confirm_box), LivePreview
 tests/              test_board, test_recognition, test_legal_move_filter, ...
 ```
 
@@ -134,8 +134,10 @@ look identical everywhere; each piece looks identical wherever it is placed.
   imported lazily inside `calibrate`) and accepts an inner reading only when
   it equals the current state or matches the result of exactly one legal move
   (castling, en passant and promotion included); anything else is discarded
-  and the last accepted board is returned. `main` wraps the real recognizer
-  in this filter.
+  and the last accepted board is returned. Takes an optional
+  ``on_event(kind, detail)`` callback: ``("move", san)`` on acceptance,
+  ``("dropped", reason)`` on rejection, nothing for unchanged frames.
+  `main` wraps the real recognizer in this filter.
 
 ### Real I/O implementations
 
@@ -168,13 +170,20 @@ normalised-correlation logic as the real backend, in pure Python).
 
 ### App loop (`chesscheat/app.py`)
 
-`run(setup, make_frame_source, recognizer, *, on_board, before_calibrate, ...)`
-is the heart, wired only to interfaces: get side → loop { get box → grab a
-preview frame → `confirm_box` } until confirmed → build a fresh frame source
-(so scripted mock sources restart; the preview grab never consumes the
-calibration frame) → calibrate from first frame → report each subsequent
-frame via `on_board`.
-`main` injects the real implementations; `tests/test_recognition.py` injects
+`run(setup, make_frame_source, recognizer, *, on_board, on_frame,
+before_calibrate, ...)` is the heart, wired only to interfaces: get side →
+loop { get box → grab a preview frame → `confirm_box` } until confirmed →
+build a fresh frame source (so scripted mock sources restart; the preview
+grab never consumes the calibration frame) → calibrate from first frame →
+for each subsequent frame, surface it raw via `on_frame` then report the
+reading via `on_board`.
+`main` injects the real implementations and wires the terminal UI
+(`_console_ui` returns `(on_board, on_frame, on_event)` sharing one display:
+board + FEN, a timestamped recent-activity log fed by the filter's
+`on_event`, and a capture-rate line refreshed every frame) plus a
+`LivePreview` window (`gui/live_preview.py`) showing each raw capture with
+the fps in its title; the preview self-disables on any Tk failure rather
+than break the loop. `tests/test_recognition.py` injects
 mocks to verify positions evolving over time are recognised exactly.
 
 ### Tests (`tests/`)
