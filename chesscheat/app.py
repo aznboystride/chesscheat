@@ -16,12 +16,14 @@ def run(setup, make_frame_source, recognizer, *, on_board,
         before_calibrate=lambda: None, interval=0.0, sleeper=time.sleep):
     """Drive the read loop using injected interface implementations.
 
-    Asks ``setup`` for the side and box, builds a frame source, calibrates the
+    Asks ``setup`` for the side and box, shows the user what the box captures
+    (reselecting until it is confirmed), builds a frame source, calibrates the
     recognizer from the first frame (the starting position) and then reports
     every subsequent frame until the source is exhausted or interrupted.
 
     Args:
-        setup: A ``SetupProvider`` for the side and bounding box.
+        setup: A ``SetupProvider`` for the side, bounding box, and capture
+            confirmation.
         make_frame_source: A ``box -> FrameSource`` factory.
         recognizer: A ``BoardRecognizer`` to calibrate and read with.
         on_board: Callback invoked as ``(board_map, playing_white)`` for each
@@ -35,7 +37,10 @@ def run(setup, make_frame_source, recognizer, *, on_board,
         The ``playing_white`` boolean chosen via ``setup``.
     """
     playing_white = setup.select_side()
-    box = setup.select_box()
+    while True:
+        box = setup.select_box()
+        if setup.confirm_box(make_frame_source(box).grab()):
+            break
     frames = make_frame_source(box)
 
     before_calibrate()
