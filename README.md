@@ -79,14 +79,22 @@ The program opens a small GUI to configure itself:
    corners are chosen — it never blocks the board while the reader runs, so
    you can click and move pieces normally.
 3. **Confirm the capture** — a window shows exactly what was captured from
-   the selected region. Click **Looks good** to proceed, or **Reselect** to
-   pick the corners again.
+   the selected region, which must be the board **in the starting position**.
+   Click **Looks good** to proceed, or **Reselect** to pick the corners again.
 
 (If no display or Tk is available, it falls back to text prompts for the side,
 the corner coordinates, and a y/n capture confirmation.)
 
-After you confirm calibration, it loops: screenshotting the board, classifying
-all 64 squares, and reprinting the position whenever it changes, for example:
+Confirming closes the window and calibration starts immediately — a progress
+bar in the terminal tracks the 64 squares being learned:
+
+```
+Capture confirmed -- calibrating from the starting position...
+  Calibrating [########################........] 48/64 squares
+```
+
+Then it loops: screenshotting the board, classifying all 64 squares, and
+reprinting the position whenever it changes, for example:
 
 ```
    a  b  c  d  e  f  g  h

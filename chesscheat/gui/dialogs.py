@@ -21,6 +21,24 @@ import sys
 import time
 
 
+def _dismiss(root):
+    """Tear a dialog window down so it is really gone from the screen.
+
+    ``destroy()`` alone only *schedules* the close; if the program then blocks
+    without pumping the Tk event queue (e.g. while calibrating or waiting on
+    stdin), the dead window can linger on screen -- unrepainted, showing a
+    busy cursor. Unmapping first and flushing the queue guarantees the window
+    has disappeared by the time this returns.
+
+    Args:
+        root: The ``tk.Tk`` window to close.
+    """
+    root.withdraw()
+    root.update_idletasks()
+    root.update()
+    root.destroy()
+
+
 def _image_to_ppm(image):
     """Encode a captured frame as binary PPM (P6) bytes.
 
@@ -82,7 +100,7 @@ def select_side():
 
     def pick(is_white):
         choice["white"] = is_white
-        root.destroy()
+        _dismiss(root)
 
     buttons = tk.Frame(root)
     buttons.pack()
@@ -91,7 +109,7 @@ def select_side():
     tk.Button(buttons, text="Black", width=10, height=2,
               command=lambda: pick(False)).pack(side="left", padx=10)
 
-    root.bind("<Escape>", lambda e: root.destroy())
+    root.bind("<Escape>", lambda e: _dismiss(root))
     root.focus_force()
     root.mainloop()
 
@@ -164,17 +182,6 @@ def select_box():
             sx, sy = start_xy[0]
             canvas.coords(rect, sx, sy, event.x, event.y)
 
-    def dismiss():
-        # Unmap the overlay and flush the event queue *before* destroying it,
-        # so the fullscreen window is really gone from the screen (not merely
-        # scheduled to close) by the time this function returns. Otherwise it
-        # can linger over the board -- blocking the user's clicks -- and show
-        # up in the first captured frame.
-        root.withdraw()
-        root.update_idletasks()
-        root.update()
-        root.destroy()
-
     def on_click(event):
         clicks.append((event.x_root, event.y_root))
         if len(clicks) == 1:
@@ -182,11 +189,11 @@ def select_box():
             canvas.itemconfig(prompt, text=PROMPTS[1])
             canvas.itemconfig(rect, state="normal")
         else:
-            dismiss()
+            _dismiss(root)
 
     def cancel(_event):
         clicks.clear()
-        dismiss()
+        _dismiss(root)
 
     canvas.bind("<Motion>", on_motion)
     canvas.bind("<Button-1>", on_click)
@@ -229,7 +236,9 @@ def confirm_box(image):
     root = tk.Tk()
     root.title("Confirm the captured board")
 
-    tk.Label(root, text="Is this exactly the board?",
+    tk.Label(root, text="Is this exactly the board, with the pieces in the"
+                        " starting position?\nCalibration begins as soon as"
+                        " you confirm.",
              font=("Helvetica", 13)).pack(pady=(14, 8))
 
     photo = tk.PhotoImage(master=root, data=_image_to_ppm(image))
@@ -252,7 +261,7 @@ def confirm_box(image):
 
     def pick(ok):
         answer["ok"] = ok
-        root.destroy()
+        _dismiss(root)
 
     buttons = tk.Frame(root)
     buttons.pack(pady=14)
@@ -261,7 +270,7 @@ def confirm_box(image):
     tk.Button(buttons, text="Reselect", width=12, height=2,
               command=lambda: pick(False)).pack(side="left", padx=10)
 
-    root.bind("<Escape>", lambda e: root.destroy())
+    root.bind("<Escape>", lambda e: _dismiss(root))
     root.eval("tk::PlaceWindow . center")
     root.focus_force()
     root.mainloop()

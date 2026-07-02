@@ -27,19 +27,25 @@ class TemplateBoardRecognizer(BoardRecognizer):
         backend: The ``ImageBackend`` used for cropping, matching and recolour.
         playing_white: Perspective captured at calibration time.
         templates: Dict mapping ``(label, is_light)`` to a feature.
+        on_progress: Optional ``(done, total)`` callback reporting calibration
+            progress.
     """
 
-    def __init__(self, backend):
+    def __init__(self, backend, on_progress=None):
         """Initialise the recognizer.
 
         Args:
             backend: An ``ImageBackend`` implementation used to crop squares,
                 score template similarity and synthesise opposite-colour
                 templates.
+            on_progress: Optional callable invoked as ``on_progress(done,
+                total)`` after each square is learned during ``calibrate``,
+                ending with ``done == total``; e.g. to draw a progress bar.
         """
         self.backend = backend
         self.playing_white = True
         self.templates = {}  # (label, is_light) -> feature
+        self.on_progress = on_progress
 
     def calibrate(self, image, playing_white):
         """Learn how each piece and empty square looks from the start position.
@@ -55,6 +61,7 @@ class TemplateBoardRecognizer(BoardRecognizer):
                 perspective, False for black's.
         """
         self.playing_white = playing_white
+        report = self.on_progress or (lambda done, total: None)
 
         patches = {}   # (label, is_light) -> patch
         empties = {}   # is_light -> empty-square patch
@@ -67,6 +74,7 @@ class TemplateBoardRecognizer(BoardRecognizer):
                 patches.setdefault((label, light), patch)
                 if label == ".":
                     empties[light] = patch
+                report(row * 8 + col + 1, 64)
 
         templates = {key: self.backend.feature(patch)
                      for key, patch in patches.items()}

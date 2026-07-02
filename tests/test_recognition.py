@@ -53,6 +53,17 @@ class CalibrationTests(unittest.TestCase):
         recognizer.calibrate(image, True)
         self.assertEqual(recognizer.read(image), board.starting_board())
 
+    def test_calibration_reports_progress(self):
+        calls = []
+        recognizer = TemplateBoardRecognizer(
+            MockImageBackend(),
+            on_progress=lambda done, total: calls.append((done, total)))
+        recognizer.calibrate(render_mock_image(board.starting_board(), True),
+                             True)
+        self.assertEqual(calls[0], (1, 64))
+        self.assertEqual(calls[-1], (64, 64))
+        self.assertEqual(len(calls), 64)
+
 
 class EvolvingPositionTests(unittest.TestCase):
     def test_pipeline_white(self):

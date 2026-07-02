@@ -117,7 +117,9 @@ look identical everywhere; each piece looks identical wherever it is placed.
   and queens on a single colour, the missing piece-on-opposite-colour templates
   are **synthesised** (via the backend's `recolor`, repainting the empty
   background to the other colour) so every piece is recognisable on either
-  colour. The same algorithm runs with the real and the mock backend.
+  colour. The same algorithm runs with the real and the mock backend. Takes
+  an optional ``on_progress(done, total)`` callback reporting each of the 64
+  squares learned during calibration (`main` wires a terminal progress bar).
 - `NumpyImageBackend` — real backend. `feature` is a `(shape, mean)` pair:
   `shape` is a mean-subtracted, unit-normalised grayscale vector (so its dot
   product is the normalised cross-correlation coefficient, OpenCV's
@@ -142,10 +144,11 @@ look identical everywhere; each piece looks identical wherever it is placed.
 - `chesscheat/gui/dialogs.py` — tkinter setup UI: White/Black buttons, a
   crosshair overlay to click the two corners, and a capture-confirmation
   dialog (`confirm_box`, image shown via a PPM-encoded `tk.PhotoImage` —
-  `_image_to_ppm`, no Pillow). The overlay is unmapped and the event queue
-  flushed **before** `select_box` returns (plus a short repaint sleep) so
-  nothing lingers over the board blocking the user's clicks or polluting the
-  first capture. On macOS the overlay is a translucent **borderless window**
+  `_image_to_ppm`, no Pillow). Every dialog is torn down via `_dismiss`
+  (unmap + flush the event queue **before** destroy; the overlay also sleeps
+  briefly for a repaint) so no dead window lingers on screen — beachballing,
+  blocking the user's clicks, or polluting the first capture — while the
+  program blocks on calibration or stdin. On macOS the overlay is a translucent **borderless window**
   (`overrideredirect` + screen-sized geometry), *not* Tk `-fullscreen`, which
   would move into its own black Space and hide the board; right-click cancels
   alongside Escape since borderless windows may not get key events. macOS
