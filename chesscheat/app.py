@@ -61,8 +61,15 @@ def run(setup, make_frame_source, recognizer, *, on_board,
     return playing_white
 
 
-def _console_printer():
+def _console_printer(header=""):
     """Build a de-duplicating ``on_board`` callback that prints board + FEN.
+
+    Args:
+        header: Status line reprinted above the board on every repaint. The
+            printer clears the screen each time the position changes, which
+            erases everything printed before (including the calibration
+            progress), so any state the user should keep seeing must be part
+            of this header.
 
     Returns:
         A ``(board_map, playing_white)`` callback that clears the screen and
@@ -73,6 +80,8 @@ def _console_printer():
     def show(board_map, playing_white):
         if board_map != last[0]:
             print("\033[H\033[J", end="")  # clear screen
+            if header:
+                print(header + "\n")
             print(board.render(board_map, playing_white))
             print("\nFEN:", board.to_fen(board_map))
             last[0] = board_map
@@ -121,7 +130,9 @@ def main():
         NumpyImageBackend(), on_progress=_calibration_progress))
 
     run(setup, ScreenFrameSource, recognizer,
-        on_board=_console_printer(),
+        on_board=_console_printer(
+            "Calibrated 64 squares -- watching the board. "
+            "Press Ctrl+C to stop."),
         before_calibrate=lambda: print(
             "\nCapture confirmed -- calibrating from the starting position..."),
         interval=0.3)
