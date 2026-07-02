@@ -80,6 +80,26 @@ def _console_printer():
     return show
 
 
+def _calibration_progress(done, total):
+    """Render a single-line terminal progress bar for calibration.
+
+    Overwrites the same line as squares are learned and, on completion,
+    announces that the reader is live -- so it is always visible in the
+    terminal whether calibration is running, finished, or stuck.
+
+    Args:
+        done: Squares learned so far.
+        total: Total squares to learn.
+    """
+    width = 32
+    filled = width * done // total
+    print(f"\r  Calibrating [{'#' * filled}{'.' * (width - filled)}] "
+          f"{done}/{total} squares", end="", flush=True)
+    if done == total:
+        print("\nCalibration complete. Watching the board... "
+              "(press Ctrl+C to stop)\n", flush=True)
+
+
 def main():
     """Wire the real implementations and run the live reader."""
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
@@ -97,15 +117,14 @@ def main():
               "the terminal.\n")
 
     setup = FallbackSetupProvider(GuiSetupProvider(), PromptSetupProvider())
-    recognizer = LegalMoveFilter(TemplateBoardRecognizer(NumpyImageBackend()))
-
-    def gate():
-        input("\nPosition the board in the starting position, then press Enter "
-              "to calibrate...")
-        print("Calibrated. Reading board... (press Ctrl+C to stop)\n")
+    recognizer = LegalMoveFilter(TemplateBoardRecognizer(
+        NumpyImageBackend(), on_progress=_calibration_progress))
 
     run(setup, ScreenFrameSource, recognizer,
-        on_board=_console_printer(), before_calibrate=gate, interval=0.3)
+        on_board=_console_printer(),
+        before_calibrate=lambda: print(
+            "\nCapture confirmed -- calibrating from the starting position..."),
+        interval=0.3)
 
 
 if __name__ == "__main__":
