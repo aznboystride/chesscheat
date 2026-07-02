@@ -7,5 +7,6 @@ backend, and ``chesscheat.mocks`` provides a pure-Python one.
 
 from chesscheat.recognition.template_board_recognizer import TemplateBoardRecognizer
 from chesscheat.recognition.numpy_image_backend import NumpyImageBackend
+from chesscheat.recognition.legal_move_filter import LegalMoveFilter
 
-__all__ = ["TemplateBoardRecognizer", "NumpyImageBackend"]
+__all__ = ["TemplateBoardRecognizer", "NumpyImageBackend", "LegalMoveFilter"]
