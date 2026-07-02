@@ -105,6 +105,22 @@ FEN: rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR
 
 Press `Ctrl+C` to stop.
 
+## Troubleshooting
+
+**The capture shows only my desktop wallpaper (macOS).** macOS hides all
+window content from screen capture until the capturing app has **Screen
+Recording** permission. Grant it to whatever runs the program (Terminal,
+iTerm2, your IDE) under *System Settings → Privacy & Security → Screen
+Recording*, then **fully quit and reopen** that app — the permission only
+takes effect on restart. The confirmation dialog will show the real board
+once it's granted; until then, click **Reselect** after fixing it.
+
+**The selection overlay hides the window with the board (macOS).** Fixed by
+using a translucent borderless window instead of Tk fullscreen (which moves
+into its own black Space). If the overlay ever misbehaves, press `Escape` or
+right-click to cancel it, and the text-prompt fallback can be used by
+entering the corner coordinates by hand.
+
 ## Tests
 
 Most of the suite runs with **no** third-party dependencies installed: the
