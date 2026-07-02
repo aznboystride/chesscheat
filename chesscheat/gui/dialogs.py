@@ -17,6 +17,7 @@ tkinter is imported lazily inside each function so the rest of the package
 stays importable on machines without Tk (e.g. for the unit tests).
 """
 
+import sys
 import time
 
 
@@ -118,7 +119,17 @@ def select_box():
     start_xy = [None]    # window coords of the first click (for the rubber band)
 
     root = tk.Tk()
-    root.attributes("-fullscreen", True)
+    if sys.platform == "darwin":
+        # macOS: Tk's -fullscreen moves the window into its own fullscreen
+        # Space -- everything behind it (the board!) disappears and the
+        # overlay shows as solid black. A borderless window sized to the
+        # screen stays in the current Space, so the board remains visible
+        # through the translucent overlay.
+        root.overrideredirect(True)
+        root.geometry(f"{root.winfo_screenwidth()}"
+                      f"x{root.winfo_screenheight()}+0+0")
+    else:
+        root.attributes("-fullscreen", True)
     root.attributes("-topmost", True)
     try:
         root.attributes("-alpha", 0.35)   # see the board through the overlay
@@ -129,8 +140,10 @@ def select_box():
     canvas = tk.Canvas(root, cursor="crosshair", highlightthickness=0, bg="black")
     canvas.pack(fill="both", expand=True)
 
-    PROMPTS = ("Click the TOP-LEFT corner of the board",
-               "Click the BOTTOM-RIGHT corner of the board")
+    PROMPTS = ("Click the TOP-LEFT corner of the board"
+               "  (Esc or right-click cancels)",
+               "Click the BOTTOM-RIGHT corner of the board"
+               "  (Esc or right-click cancels)")
     prompt = canvas.create_text(0, 30, text=PROMPTS[0], fill="white",
                                 font=("Helvetica", 18))
     coord = canvas.create_text(0, 0, text="", fill="yellow",
@@ -177,7 +190,12 @@ def select_box():
 
     canvas.bind("<Motion>", on_motion)
     canvas.bind("<Button-1>", on_click)
+    # Borderless windows (the macOS path) do not reliably receive key
+    # events, so offer right-click as a cancel gesture alongside Escape.
+    canvas.bind("<Button-2>", cancel)
+    canvas.bind("<Button-3>", cancel)
     root.bind("<Escape>", cancel)
+    root.lift()
     root.focus_force()
     root.mainloop()
 
@@ -222,6 +240,15 @@ def confirm_box(image):
     if factor > 1:
         photo = photo.subsample(factor, factor)
     tk.Label(root, image=photo, borderwidth=2, relief="solid").pack(padx=14)
+
+    if sys.platform == "darwin":
+        # Without Screen Recording permission macOS returns only the desktop
+        # wallpaper, which is exactly what this dialog would then be showing.
+        tk.Label(root, fg="gray25", font=("Helvetica", 11),
+                 text=("Seeing only your wallpaper? Grant your terminal "
+                       "Screen Recording permission\n(System Settings → "
+                       "Privacy & Security → Screen Recording), restart it, "
+                       "then Reselect.")).pack(pady=(8, 0))
 
     def pick(ok):
         answer["ok"] = ok

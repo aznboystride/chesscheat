@@ -145,7 +145,13 @@ look identical everywhere; each piece looks identical wherever it is placed.
   `_image_to_ppm`, no Pillow). The overlay is unmapped and the event queue
   flushed **before** `select_box` returns (plus a short repaint sleep) so
   nothing lingers over the board blocking the user's clicks or polluting the
-  first capture. tkinter imported lazily.
+  first capture. On macOS the overlay is a translucent **borderless window**
+  (`overrideredirect` + screen-sized geometry), *not* Tk `-fullscreen`, which
+  would move into its own black Space and hide the board; right-click cancels
+  alongside Escape since borderless windows may not get key events. macOS
+  also needs Screen Recording permission or captures show only the wallpaper
+  (hinted in `main()`, the confirm dialog, and README troubleshooting).
+  tkinter imported lazily.
 - `chesscheat/providers/` — `GuiSetupProvider`, `PromptSetupProvider`,
   `FallbackSetupProvider` (GUI → prompt on error; a GUI *cancel* raises
   `SystemExit`, which propagates and quits), and `ScreenFrameSource`.

@@ -7,6 +7,7 @@ first frame (the starting position) and then reports every subsequent frame.
 ``main`` wires the real GUI/screen/numpy implementations; tests wire mocks.
 """
 
+import sys
 import time
 
 from chesscheat import board
@@ -88,6 +89,12 @@ def main():
 
     print("=== Live Chessboard Reader ===")
     print("Make sure the board is in the standard starting position.\n")
+    if sys.platform == "darwin":
+        print("Note (macOS): the app running this (Terminal, iTerm, ...) "
+              "needs Screen Recording\npermission -- System Settings → "
+              "Privacy & Security → Screen Recording -- or every\ncapture "
+              "will show only the desktop wallpaper. Grant it and restart "
+              "the terminal.\n")
 
     setup = FallbackSetupProvider(GuiSetupProvider(), PromptSetupProvider())
     recognizer = LegalMoveFilter(TemplateBoardRecognizer(NumpyImageBackend()))
