@@ -94,7 +94,18 @@ Capture confirmed -- calibrating from the starting position...
 ```
 
 Then it loops: screenshotting the board, classifying all 64 squares, and
-reprinting the position whenever it changes, for example:
+reprinting the position whenever it changes. While it runs:
+
+- a small always-on-top **live capture window** shows exactly what is being
+  screenshotted in real time, with the measured frame rate in its title bar
+  (close the window to dismiss it — the reader keeps going);
+- the terminal shows a **recent activity** log of the filter's decisions —
+  each accepted move (in algebraic notation) and each dropped frame (visual
+  noise that no legal move explains), timestamped;
+- the last terminal line shows the live **capture rate**, updated on every
+  frame, so a stall is immediately visible.
+
+For example:
 
 ```
    a  b  c  d  e  f  g  h
@@ -109,6 +120,12 @@ reprinting the position whenever it changes, for example:
    a  b  c  d  e  f  g  h
 
 FEN: rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR
+
+Recent activity:
+  [21:03:12] move: e4
+  [21:03:19] frame dropped: 2 square(s) changed but no legal move matches
+
+capturing at 3.3 fps
 ```
 
 Press `Ctrl+C` to stop.

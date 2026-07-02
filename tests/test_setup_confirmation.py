@@ -129,6 +129,28 @@ class FallbackConfirmTests(unittest.TestCase):
         self.assertIsInstance(MockSetupProvider(), SetupProvider)
 
 
+class LivePreviewTests(unittest.TestCase):
+    """``LivePreview`` disables itself instead of breaking the read loop."""
+
+    def test_show_without_tk_disables_quietly(self):
+        from chesscheat.gui import LivePreview
+
+        preview = LivePreview()
+        with mock.patch.dict("sys.modules", {"tkinter": None}):
+            preview.show([[0, 1], [2, 3]])   # must not raise
+            preview.show([[0, 1], [2, 3]])
+        self.assertTrue(preview.disabled)
+
+    def test_close_is_idempotent(self):
+        from chesscheat.gui import LivePreview
+
+        preview = LivePreview()
+        preview.close()
+        preview.close()
+        self.assertTrue(preview.disabled)
+        preview.show([[0]])   # no-op after close, must not raise
+
+
 class PpmEncodingTests(unittest.TestCase):
     """``_image_to_ppm`` encodes captured frames for Tk's ``PhotoImage``."""
 

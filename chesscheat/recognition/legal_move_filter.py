@@ -27,15 +27,23 @@ class LegalMoveFilter(BoardRecognizer):
 
     Attributes:
         inner: The wrapped ``BoardRecognizer``.
+        on_event: Optional ``(kind, detail)`` callback reporting filter
+            decisions.
     """
 
-    def __init__(self, inner):
+    def __init__(self, inner, on_event=None):
         """Initialise the filter around an inner recognizer.
 
         Args:
             inner: A ``BoardRecognizer`` whose raw output this class filters.
+            on_event: Optional callable invoked as ``on_event(kind, detail)``
+                when the filter makes a decision worth surfacing: ``("move",
+                san)`` when a reading is accepted as a legal move, and
+                ``("dropped", reason)`` when a changed reading matches no
+                legal move and is discarded. Unchanged frames report nothing.
         """
         self.inner = inner
+        self.on_event = on_event
         self._state = None        # last accepted {(file_idx, rank): label}
         self._chess_board = None  # python-chess Board for legality checks
 
@@ -65,13 +73,20 @@ class LegalMoveFilter(BoardRecognizer):
             Returns the previous state unchanged when the inner reading does
             not correspond to a legal chess move from the current position.
         """
+        report = self.on_event or (lambda kind, detail: None)
         candidate = self.inner.read(image)
         if candidate == self._state:
             return self._state
         move = self._matching_legal_move(candidate)
         if move is not None:
+            report("move", self._chess_board.san(move))
             self._chess_board.push(move)
             self._state = candidate
+        else:
+            changed = sum(1 for square, label in candidate.items()
+                          if self._state.get(square, ".") != label)
+            report("dropped",
+                   f"{changed} square(s) changed but no legal move matches")
         return self._state
 
     def _matching_legal_move(self, candidate):

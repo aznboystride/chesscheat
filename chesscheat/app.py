@@ -7,6 +7,7 @@ first frame (the starting position) and then reports every subsequent frame.
 ``main`` wires the real GUI/screen/numpy implementations; tests wire mocks.
 """
 
+import collections
 import sys
 import time
 
@@ -14,7 +15,8 @@ from chesscheat import board
 
 
 def run(setup, make_frame_source, recognizer, *, on_board,
-        before_calibrate=lambda: None, interval=0.0, sleeper=time.sleep):
+        on_frame=lambda image: None, before_calibrate=lambda: None,
+        interval=0.0, sleeper=time.sleep):
     """Drive the read loop using injected interface implementations.
 
     Asks ``setup`` for the side and box, shows the user what the box captures
@@ -29,6 +31,8 @@ def run(setup, make_frame_source, recognizer, *, on_board,
         recognizer: A ``BoardRecognizer`` to calibrate and read with.
         on_board: Callback invoked as ``(board_map, playing_white)`` for each
             read frame.
+        on_frame: Callback invoked with each raw captured frame before it is
+            recognised, e.g. to surface the live capture in a preview window.
         before_calibrate: Side-effect hook run just before calibration, e.g.
             to wait for the user to set up the starting position.
         interval: Seconds to sleep between frames; 0 disables sleeping.
@@ -53,6 +57,7 @@ def run(setup, make_frame_source, recognizer, *, on_board,
                 image = frames.grab()
             except StopIteration:
                 break
+            on_frame(image)
             on_board(recognizer.read(image), playing_white)
             if interval:
                 sleeper(interval)
@@ -61,32 +66,68 @@ def run(setup, make_frame_source, recognizer, *, on_board,
     return playing_white
 
 
-def _console_printer(header=""):
-    """Build a de-duplicating ``on_board`` callback that prints board + FEN.
+def _console_ui(header="", clock=time.time):
+    """Build the live terminal display: board, FEN, activity log, capture rate.
+
+    The display clears the screen on each repaint, which erases everything
+    printed earlier -- so all state the user should keep seeing (the header,
+    the recent activity, the capture rate) is part of every repaint. A full
+    repaint happens when the position changes or an event is logged; between
+    repaints the capture-rate line (the last line on screen) is rewritten in
+    place for every frame, so the terminal always shows the reader is alive.
 
     Args:
-        header: Status line reprinted above the board on every repaint. The
-            printer clears the screen each time the position changes, which
-            erases everything printed before (including the calibration
-            progress), so any state the user should keep seeing must be part
-            of this header.
+        header: Status line shown above the board on every repaint.
+        clock: Time source used for the frame-rate estimate, injectable for
+            testing.
 
     Returns:
-        A ``(board_map, playing_white)`` callback that clears the screen and
-        reprints only when the position changes from the previous frame.
+        An ``(on_board, on_frame, on_event)`` triple of callbacks sharing the
+        display: ``on_board(board_map, playing_white)`` repaints when the
+        position changes; ``on_frame(image)`` records a capture timestamp and
+        refreshes the rate line; ``on_event(kind, detail)`` appends a
+        timestamped activity line (e.g. a move or a dropped frame) and
+        repaints.
     """
-    last = [None]
+    state = {"board": None, "white": True}
+    events = collections.deque(maxlen=6)
+    times = collections.deque(maxlen=20)
 
-    def show(board_map, playing_white):
-        if board_map != last[0]:
-            print("\033[H\033[J", end="")  # clear screen
-            if header:
-                print(header + "\n")
-            print(board.render(board_map, playing_white))
-            print("\nFEN:", board.to_fen(board_map))
-            last[0] = board_map
+    def rate_text():
+        if len(times) < 2 or times[-1] <= times[0]:
+            return "capturing..."
+        return (f"capturing at "
+                f"{(len(times) - 1) / (times[-1] - times[0]):.1f} fps")
 
-    return show
+    def repaint():
+        print("\033[H\033[J", end="")  # clear screen
+        if header:
+            print(header + "\n")
+        if state["board"] is not None:
+            print(board.render(state["board"], state["white"]))
+            print("\nFEN:", board.to_fen(state["board"]))
+        if events:
+            print("\nRecent activity:")
+            print("\n".join(f"  {line}" for line in events))
+        print("\n" + rate_text().ljust(40), end="", flush=True)
+
+    def on_board(board_map, playing_white):
+        if board_map != state["board"]:
+            state["board"] = board_map
+            state["white"] = playing_white
+            repaint()
+
+    def on_frame(_image):
+        times.append(clock())
+        print("\r" + rate_text().ljust(40), end="", flush=True)
+
+    def on_event(kind, detail):
+        stamp = time.strftime("%H:%M:%S")
+        label = "frame dropped" if kind == "dropped" else kind
+        events.append(f"[{stamp}] {label}: {detail}")
+        repaint()
+
+    return on_board, on_frame, on_event
 
 
 def _calibration_progress(done, total):
@@ -125,14 +166,24 @@ def main():
               "will show only the desktop wallpaper. Grant it and restart "
               "the terminal.\n")
 
+    from chesscheat.gui import LivePreview
+
     setup = FallbackSetupProvider(GuiSetupProvider(), PromptSetupProvider())
-    recognizer = LegalMoveFilter(TemplateBoardRecognizer(
-        NumpyImageBackend(), on_progress=_calibration_progress))
+
+    on_board, console_frame, on_event = _console_ui(
+        "Calibrated 64 squares -- watching the board. Press Ctrl+C to stop.")
+    recognizer = LegalMoveFilter(
+        TemplateBoardRecognizer(NumpyImageBackend(),
+                                on_progress=_calibration_progress),
+        on_event=on_event)
+    preview = LivePreview()
+
+    def on_frame(image):
+        preview.show(image)
+        console_frame(image)
 
     run(setup, ScreenFrameSource, recognizer,
-        on_board=_console_printer(
-            "Calibrated 64 squares -- watching the board. "
-            "Press Ctrl+C to stop."),
+        on_board=on_board, on_frame=on_frame,
         before_calibrate=lambda: print(
             "\nCapture confirmed -- calibrating from the starting position..."),
         interval=0.3)

@@ -86,6 +86,23 @@ class EvolvingPositionTests(unittest.TestCase):
         self.assertEqual(collect_reads([start, pushed], True)[0], pushed)
 
 
+class FrameCallbackTests(unittest.TestCase):
+    def test_on_frame_sees_every_read_frame(self):
+        positions = opening_sequence()
+        frames = [render_mock_image(p, True) for p in positions]
+        raw = []
+        app.run(
+            MockSetupProvider(True, (0, 0, 8, 8)),
+            lambda box: MockFrameSource(frames),
+            TemplateBoardRecognizer(MockImageBackend()),
+            on_board=lambda board_map, _white: None,
+            on_frame=raw.append,
+        )
+        # The calibration frame is consumed before the loop; every frame that
+        # is read is first surfaced raw through on_frame.
+        self.assertEqual(raw, frames[1:])
+
+
 class InterfaceConformanceTests(unittest.TestCase):
     def test_mocks_implement_interfaces(self):
         self.assertIsInstance(MockSetupProvider(), SetupProvider)

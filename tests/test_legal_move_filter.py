@@ -434,6 +434,48 @@ class CursorArtifactTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Event reporting
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class EventReportingTests(unittest.TestCase):
+    """The filter reports accepted moves and dropped frames via ``on_event``."""
+
+    def setUp(self):
+        self.events = []
+        self.rec = LegalMoveFilter(
+            TemplateBoardRecognizer(MockImageBackend()),
+            on_event=lambda kind, detail: self.events.append((kind, detail)))
+        self.start = _calibrate(self.rec)
+
+    def test_accepted_move_reports_san(self):
+        positions = _sequence(["e2e4", "c7c5"])
+        _read(self.rec, positions[1])
+        _read(self.rec, positions[2])
+        self.assertEqual(self.events, [("move", "e4"), ("move", "c5")])
+
+    def test_dropped_frame_reports_changed_square_count(self):
+        corrupted = dict(self.start)
+        corrupted[(3, 4)] = 'Q'   # one impossible square
+        _read(self.rec, corrupted)
+        self.assertEqual(len(self.events), 1)
+        kind, detail = self.events[0]
+        self.assertEqual(kind, "dropped")
+        self.assertIn("1 square(s) changed", detail)
+
+    def test_unchanged_frame_reports_nothing(self):
+        _read(self.rec, self.start)
+        _read(self.rec, self.start)
+        self.assertEqual(self.events, [])
+
+    def test_castling_reports_san(self):
+        uci = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "e1g1"]
+        for position in _sequence(uci)[1:]:
+            _read(self.rec, position)
+        self.assertEqual(self.events[-1], ("move", "O-O"))
+
+
+# ---------------------------------------------------------------------------
 # Long game: many moves, no false positives
 # ---------------------------------------------------------------------------
 
