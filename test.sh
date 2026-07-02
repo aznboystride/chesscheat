@@ -4,8 +4,8 @@
 #
 # Usage:
 #   ./test.sh                          # full suite (all tests)
-#   ./test.sh --fast                   # dependency-free tests only (no numpy/Pillow)
-#   ./test.sh --real                   # real-image tests (requires numpy + Pillow)
+#   ./test.sh --fast                   # dependency-free tests only (no third-party deps)
+#   ./test.sh --real                   # dep-requiring tests (numpy/Pillow/python-chess)
 #   ./test.sh tests.test_board         # single module
 #   ./test.sh tests.test_board.FenTests            # single class
 #   ./test.sh tests.test_board.FenTests.test_after_e4  # single method
@@ -27,8 +27,9 @@ case "${1:-}" in
         exec "$PYTHON" -m unittest tests.test_board tests.test_recognition -v
         ;;
     --real)
-        # Only run tests that require numpy and Pillow (real board images).
-        exec "$PYTHON" -m unittest tests.test_real_images tests.test_general_boards -v
+        # Only run tests that need third-party deps (numpy/Pillow/python-chess).
+        exec "$PYTHON" -m unittest tests.test_real_images tests.test_general_boards \
+            tests.test_legal_move_filter tests.test_filter_real_images -v
         ;;
     "")
         # Full suite: discover every test under tests/.

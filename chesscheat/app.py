@@ -79,13 +79,13 @@ def main():
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
                                       FallbackSetupProvider, ScreenFrameSource)
     from chesscheat.recognition import (TemplateBoardRecognizer,
-                                        NumpyImageBackend)
+                                        NumpyImageBackend, LegalMoveFilter)
 
     print("=== Live Chessboard Reader ===")
     print("Make sure the board is in the standard starting position.\n")
 
     setup = FallbackSetupProvider(GuiSetupProvider(), PromptSetupProvider())
-    recognizer = TemplateBoardRecognizer(NumpyImageBackend())
+    recognizer = LegalMoveFilter(TemplateBoardRecognizer(NumpyImageBackend()))
 
     def gate():
         input("\nPosition the board in the starting position, then press Enter "

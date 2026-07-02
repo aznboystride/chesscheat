@@ -24,11 +24,23 @@ own colour), and the piece-on-opposite-colour appearances that the starting
 position never shows (kings and queens) are synthesised from it by repainting
 the empty background, so any later position is read correctly.
 
+### Robustness to visual noise
+
+Raw template matching can be corrupted by transient artifacts — a mouse
+cursor over a square, a last-move highlight, a piece mid-drag. The live
+reader therefore runs the recognizer behind a **legal-move filter**
+(`LegalMoveFilter`): it tracks the game with a chess rule engine
+([python-chess](https://pypi.org/project/chess/)) and accepts a new reading
+only when it equals the current position or is exactly one legal move away
+(including castling, en passant, and promotion). A frame that no legal move
+can explain is discarded and the last good position is kept, so noisy frames
+heal themselves instead of corrupting the state.
+
 ## Requirements
 
 - Python 3.8+
 - A real display (the tool captures the screen and cannot run headless)
-- Python modules: `mss`, `numpy` (see `requirements.txt`)
+- Python modules: `mss`, `numpy`, `chess` (see `requirements.txt`)
 
 ## Installation
 
@@ -115,6 +127,16 @@ when they are absent:
 pip install -r requirements-dev.txt
 python3 -m unittest tests.test_real_images
 ```
+
+The legal-move filter has its own suites (both skipped automatically when
+their deps are absent): `tests/test_legal_move_filter.py` (needs
+python-chess) covers legal openings, castling, en passant, promotion, and a
+battery of simulated artifacts — cursor over a square, pieces vanishing
+mid-drag, highlight misreads — through the mock pipeline;
+`tests/test_filter_real_images.py` (needs numpy, Pillow, and python-chess)
+paints cursor crosses and highlight tints directly onto the real fixture
+images and verifies corrupted frames are rejected while genuine moves still
+land.
 
 ## Layout
 

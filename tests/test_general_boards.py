@@ -43,7 +43,9 @@ def _piece_pattern(label):
 
 
 # ...precompute once; pieces look identical wherever they are placed.
-_PATTERNS = {label: _piece_pattern(label) for label in LABELS if label != "."}
+# (Guarded so this module still imports -- and its tests skip -- without numpy.)
+_PATTERNS = ({label: _piece_pattern(label) for label in LABELS if label != "."}
+             if _HAVE_NUMPY else {})
 
 
 def render(board_map, playing_white):

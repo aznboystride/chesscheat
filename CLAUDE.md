@@ -28,10 +28,13 @@ python3 -m unittest tests.test_board.FenTests.test_after_e4
 ```
 
 There is no build step or linter config. Runtime dependencies (`mss`,
-`numpy`) live in `requirements.txt`; `setup.sh` builds a `venv/` and installs
-them (honors a `PYTHON` env var override). Installing manually works too:
-`pip install -r requirements.txt`. The entire test suite runs with **no**
-third-party deps installed, because it exercises the mock implementations.
+`numpy`, `chess`) live in `requirements.txt`; `setup.sh` builds a `venv/` and
+installs them (honors a `PYTHON` env var override). Installing manually works
+too: `pip install -r requirements.txt`. The entire test suite still *runs*
+with **no** third-party deps installed: the dep-free tests exercise the mock
+implementations, and the dep-requiring tests are `skipUnless`-guarded. Wrapper
+scripts: `./run.sh` (live reader), `./test.sh` (`--fast` dep-free only,
+`--real` dep-requiring only, or a dotted test path), `./generate-fixtures.sh`.
 See `README.md` for end-user install/run instructions.
 
 ## Coding preferences
@@ -70,12 +73,12 @@ chesscheat/
   board.py          pure logic (functions, no classes)
   __main__.py       `python3 -m chesscheat` entry point
   interfaces/       SetupProvider, FrameSource, ImageBackend, BoardRecognizer
-  recognition/      TemplateBoardRecognizer, NumpyImageBackend
+  recognition/      TemplateBoardRecognizer, NumpyImageBackend, LegalMoveFilter
   providers/        Gui/Prompt/Fallback SetupProvider, ScreenFrameSource
   mocks/            Mock{SetupProvider,FrameSource,ImageBackend}, synthetic_image
   capture/          screenshot
   gui/              dialogs (select_side, select_box)
-tests/              test_board, test_recognition
+tests/              test_board, test_recognition, test_legal_move_filter, ...
 ```
 
 ### Interfaces (`chesscheat/interfaces/`)
@@ -121,6 +124,14 @@ look identical everywhere; each piece looks identical wherever it is placed.
   zeroes them). `recolor` swaps a piece's background colour using the average
   empty colours. Templates are tied to the current board theme/size/position;
   recalibrate if any change.
+- `LegalMoveFilter(inner)` — a `BoardRecognizer` decorator that makes the
+  reader robust to transient visual noise (mouse cursor, move highlights,
+  drag animations). It tracks the game with **python-chess** (`chess`,
+  imported lazily inside `calibrate`) and accepts an inner reading only when
+  it equals the current state or matches the result of exactly one legal move
+  (castling, en passant and promotion included); anything else is discarded
+  and the last accepted board is returned. `main` wraps the real recognizer
+  in this filter.
 
 ### Real I/O implementations
 
@@ -163,6 +174,16 @@ mocks to verify positions evolving over time are recognised exactly.
   theme with non-chess-looking pieces, through positions where kings/queens
   cross onto the opposite-coloured square (the synthesis path). Renders boards
   with numpy directly; `skipUnless(numpy)`-guarded.
+- `test_legal_move_filter.py` — `LegalMoveFilter` through the mock pipeline:
+  legal openings, castling (both sides), en passant, promotion and
+  underpromotion accepted; simulated artifacts (cursor over a square, piece
+  vanishing mid-drag, highlight misreads, impossible extra pieces, multi-square
+  corruption) rejected while the state stays intact and later legal moves still
+  land. `skipUnless(chess)`-guarded.
+- `test_filter_real_images.py` — the same filter over the real fixture images:
+  paints cursor crosses and 50 % highlight tints directly onto the PNGs and
+  checks corrupted frames are dropped and genuine moves accepted, for all
+  three piece sets. `skipUnless(numpy + Pillow + chess)`-guarded.
 
 Note `NumpyImageBackend`'s feature is a `(shape, mean)` pair: mean-subtracted
 correlation discriminates pieces across square colours, while the brightness
@@ -172,9 +193,10 @@ this because their empty squares carry a pattern; the real-image test does.
 
 ### Import boundary (important)
 
-Keep heavy/IO deps (`numpy`, `mss`, tkinter, `chesscheat.capture`) imported
-**lazily** inside the methods/functions that use them (see
-`recognition/numpy_image_backend.py`, `providers/`, `gui/dialogs.py`). The
+Keep heavy/IO deps (`numpy`, `mss`, `chess`, tkinter, `chesscheat.capture`)
+imported **lazily** inside the methods/functions that use them (see
+`recognition/numpy_image_backend.py`, `recognition/legal_move_filter.py`,
+`providers/`, `gui/dialogs.py`). The
 `board`, `interfaces`, `mocks` packages and the `run` loop must stay importable
 dependency-free so the suite runs anywhere. Subpackage `__init__.py` files must
 likewise avoid eager heavy imports (e.g. `capture/__init__.py` pulls in numpy,
