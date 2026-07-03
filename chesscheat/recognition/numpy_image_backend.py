@@ -4,14 +4,14 @@ from chesscheat.interfaces import ImageBackend
 
 
 def _resize_nearest(arr, size):
-    """Resize a 2-D array to a square via nearest-neighbour sampling.
+    """Resize an array's first two dimensions via nearest-neighbour sampling.
 
     Args:
-        arr: A 2-D numpy array.
+        arr: A 2-D or 3-D numpy array.
         size: Target side length, in pixels.
 
     Returns:
-        A ``size`` x ``size`` numpy array sampled from ``arr``.
+        A ``size`` x ``size`` (x channels) numpy array sampled from ``arr``.
     """
     import numpy as np
 
@@ -22,44 +22,75 @@ def _resize_nearest(arr, size):
 
 
 class NumpyImageBackend(ImageBackend):
-    """Real backend: crops numpy frames and matches squares by similarity.
+    """Real backend: matches squares by the shape and colour of pieces only.
 
-    Each square's feature is a pair ``(shape, mean)``:
+    The square's own colour is deliberately ignored, because chess UIs tint
+    squares (selection and last-move highlights) and that must not throw off
+    tracking. Each square is **canonicalised against its own background**
+    before matching:
 
-    - ``shape`` is the mean-subtracted, unit-normalised grayscale patch, so its
-      dot product is the normalised cross-correlation coefficient (OpenCV's
-      ``TM_CCOEFF_NORMED``). Removing the mean makes piece matching robust to a
-      piece sitting on a different-coloured square than its calibration square.
-    - ``mean`` is the average brightness, which keeps *flat* squares
-      distinguishable: with the mean removed a flat (empty) square would be the
-      zero vector and correlate with nothing, so empty light/dark squares are
-      told apart -- and from pieces -- by brightness instead.
+    - the background colour is estimated per patch as the median colour of
+      the patch's border ring (pieces sit centred, so the ring is background
+      -- highlighted or not);
+    - pixels close to that colour are background and are repainted to a
+      constant mid-grey; the remaining pixels are the piece, kept as-is.
 
-    ``similarity`` combines the two: correlation plus ``brightness_weight``
-    times brightness closeness.
+    Whatever colour the square is -- its calibrated colour or an arbitrary
+    highlight -- the canonical patch looks the same, so a highlighted square
+    matches the template learned from a clean one.
+
+    A canonical square's feature is a ``(shape, mean, coverage)`` triple:
+
+    - ``shape``: the mean-subtracted, unit-normalised grayscale canonical
+      patch, so its dot product is the normalised cross-correlation
+      coefficient (OpenCV's ``TM_CCOEFF_NORMED``, numpy-only -- **no cv2**);
+      it captures the piece's shape and internal texture.
+    - ``mean``: the canonical patch's average brightness, separating light
+      pieces from dark ones.
+    - ``coverage``: the fraction of piece (non-background) pixels, which
+      cleanly separates empty squares (near zero) from occupied ones without
+      referring to the square's colour at all.
+
+    ``similarity`` combines the three: correlation plus ``brightness_weight``
+    times brightness closeness plus ``coverage_weight`` times coverage
+    closeness.
 
     Attributes:
         size: Side length each square is normalised to before matching.
         margin: Fraction trimmed from each side of a square.
         brightness_weight: Weight of the brightness term in ``similarity``.
+        coverage_weight: Weight of the coverage term in ``similarity``.
+        background_tol: Max per-pixel colour distance to the estimated
+            background for a pixel to count as background.
+        recolor_tol: Max per-pixel colour distance to ``from_empty`` for a
+            pixel to count as background in ``recolor``.
     """
 
+    _CANONICAL_BG = 127.0  # grey background pixels are repainted to
+
     def __init__(self, size=48, margin=0.12, brightness_weight=0.5,
-                 recolor_tol=40):
+                 coverage_weight=0.5, background_tol=40, recolor_tol=40):
         """Initialise the backend.
 
         Args:
             size: Side length each square is normalised to before matching.
             margin: Fraction trimmed from each side of a square to drop
                 borders and coordinate labels.
-            brightness_weight: Weight of the brightness-closeness term relative
+            brightness_weight: Weight of the brightness-closeness term
+                relative to the shape-correlation term in ``similarity``.
+            coverage_weight: Weight of the coverage-closeness term relative
                 to the shape-correlation term in ``similarity``.
-            recolor_tol: Max per-pixel colour distance to ``from_empty`` for a
-                pixel to count as background in ``recolor``.
+            background_tol: Max per-pixel colour distance (summed over
+                channels) to the border-estimated background for a pixel to
+                be canonicalised away as background.
+            recolor_tol: Max per-pixel colour distance to ``from_empty`` for
+                a pixel to count as background in ``recolor``.
         """
         self.size = size
         self.margin = margin
         self.brightness_weight = brightness_weight
+        self.coverage_weight = coverage_weight
+        self.background_tol = background_tol
         self.recolor_tol = recolor_tol
 
     def get_square(self, image, row, col):
@@ -82,46 +113,78 @@ class NumpyImageBackend(ImageBackend):
         inner = cell[my:ch - my, mx:cw - mx]
         return inner if inner.size else cell
 
-    def feature(self, patch):
-        """Reduce a square to a ``(shape, mean)`` feature.
+    def _canonicalise(self, patch):
+        """Separate a patch into piece pixels and background.
 
         Args:
             patch: A square crop from ``get_square`` (grayscale or colour).
 
         Returns:
-            A ``(shape, mean)`` tuple: ``shape`` is a unit-normalised,
-            mean-subtracted numpy vector (the zero vector for a flat patch);
-            ``mean`` is the average intensity scaled to ``[0, 1]``.
+            A ``(canonical, coverage)`` pair: ``canonical`` is the resized
+            grayscale patch with background pixels repainted to a constant
+            grey, and ``coverage`` is the fraction of piece pixels.
         """
         import numpy as np
 
         arr = np.asarray(patch, dtype=np.float64)
-        if arr.ndim == 3:
-            arr = arr[..., :3].mean(axis=2)
-        arr = _resize_nearest(arr, self.size)
-        vec = arr.ravel()
+        if arr.ndim == 2:
+            arr = np.stack([arr] * 3, axis=-1)
+        arr = _resize_nearest(arr[..., :3], self.size)
+
+        ring = max(1, self.size // 10)
+        border = np.concatenate([
+            arr[:ring].reshape(-1, 3), arr[-ring:].reshape(-1, 3),
+            arr[:, :ring].reshape(-1, 3), arr[:, -ring:].reshape(-1, 3),
+        ])
+        background = np.median(border, axis=0)
+
+        is_piece = np.abs(arr - background).sum(axis=-1) > self.background_tol
+        gray = arr.mean(axis=-1)
+        canonical = np.where(is_piece, gray, self._CANONICAL_BG)
+        return canonical, float(is_piece.mean())
+
+    def feature(self, patch):
+        """Reduce a square to a background-independent feature.
+
+        Args:
+            patch: A square crop from ``get_square`` (grayscale or colour).
+
+        Returns:
+            A ``(shape, mean, coverage)`` triple: ``shape`` is a
+            unit-normalised, mean-subtracted numpy vector of the canonicalised
+            patch (the zero vector for an empty square); ``mean`` is its
+            average intensity scaled to ``[0, 1]``; ``coverage`` is the
+            fraction of piece pixels.
+        """
+        import numpy as np
+
+        canonical, coverage = self._canonicalise(patch)
+        vec = canonical.ravel()
         centered = vec - vec.mean()
         norm = np.linalg.norm(centered)
         shape = centered / norm if norm else centered
-        return shape, vec.mean() / 255.0
+        return shape, vec.mean() / 255.0, coverage
 
     def similarity(self, feature_a, feature_b):
-        """Score two features by shape correlation plus brightness closeness.
+        """Score two features by shape, brightness and coverage closeness.
 
         Args:
-            feature_a: A ``(shape, mean)`` tuple from ``feature``.
-            feature_b: Another ``(shape, mean)`` tuple from ``feature``.
+            feature_a: A ``(shape, mean, coverage)`` triple from ``feature``.
+            feature_b: Another ``(shape, mean, coverage)`` triple.
 
         Returns:
-            ``corr + brightness_weight * (1 - |mean_a - mean_b|)`` as a float,
+            ``corr + brightness_weight * (1 - |mean_a - mean_b|) +
+            coverage_weight * (1 - |coverage_a - coverage_b|)`` as a float,
             where ``corr`` is the dot product of the shape vectors.
         """
         import numpy as np
 
-        shape_a, mean_a = feature_a
-        shape_b, mean_b = feature_b
+        shape_a, mean_a, coverage_a = feature_a
+        shape_b, mean_b, coverage_b = feature_b
         corr = float(np.dot(shape_a, shape_b))
-        return corr + self.brightness_weight * (1.0 - abs(mean_a - mean_b))
+        return (corr
+                + self.brightness_weight * (1.0 - abs(mean_a - mean_b))
+                + self.coverage_weight * (1.0 - abs(coverage_a - coverage_b)))
 
     def recolor(self, patch, from_empty, to_empty):
         """Repaint background pixels from one empty colour to another.
@@ -131,6 +194,10 @@ class NumpyImageBackend(ImageBackend):
         whole square. Pixels of ``patch`` within ``recolor_tol`` of the source
         colour are repainted with the target colour; the rest (the piece) are
         kept. Shape-independent, so it tolerates squares differing by a pixel.
+
+        With background canonicalisation the synthesised template's feature is
+        (by design) nearly identical to the original's; ``recolor`` is kept so
+        every piece still has a template under both colour keys.
 
         Args:
             patch: A square crop with a piece on a ``from_empty`` square.

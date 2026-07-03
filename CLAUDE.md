@@ -120,14 +120,22 @@ look identical everywhere; each piece looks identical wherever it is placed.
   colour. The same algorithm runs with the real and the mock backend. Takes
   an optional ``on_progress(done, total)`` callback reporting each of the 64
   squares learned during calibration (`main` wires a terminal progress bar).
-- `NumpyImageBackend` — real backend. `feature` is a `(shape, mean)` pair:
-  `shape` is a mean-subtracted, unit-normalised grayscale vector (so its dot
-  product is the normalised cross-correlation coefficient, OpenCV's
-  `TM_CCOEFF_NORMED`, but numpy-only — **no `cv2`**), and `mean` is brightness,
-  which keeps *flat* (empty) squares distinguishable (mean-subtraction alone
-  zeroes them). `recolor` swaps a piece's background colour using the average
-  empty colours. Templates are tied to the current board theme/size/position;
-  recalibrate if any change.
+- `NumpyImageBackend` — real backend. Matches **only the shape and colour of
+  pieces, never the square colour**: chess UIs tint squares (selection /
+  last-move highlights, which persist until the next move), so each patch is
+  first **canonicalised against its own background** — the background colour
+  is estimated per patch as the median of the patch's border ring, and pixels
+  within `background_tol` of it are repainted to a constant grey. `feature`
+  is then a `(shape, mean, coverage)` triple of the canonical patch: `shape`
+  is a mean-subtracted, unit-normalised grayscale vector (its dot product is
+  the normalised cross-correlation coefficient, OpenCV's `TM_CCOEFF_NORMED`,
+  but numpy-only — **no `cv2`**), `mean` is brightness (light vs dark
+  pieces), and `coverage` is the piece-pixel fraction, which separates empty
+  squares from occupied ones with no reference to the square's colour.
+  `recolor` swaps a piece's background colour using the average empty
+  colours (post-canonicalisation it barely changes the feature; kept so
+  every piece has a template under both colour keys). Templates are tied to
+  the current board theme/size/position; recalibrate if any change.
 - `LegalMoveFilter(inner)` — a `BoardRecognizer` decorator that makes the
   reader robust to transient visual noise (mouse cursor, move highlights,
   drag animations). It tracks the game with **python-chess** (`chess`,
@@ -217,11 +225,15 @@ mocks to verify positions evolving over time are recognised exactly.
   frame, prompt y/n and fallback forwarding, and `_image_to_ppm` encoding
   (grayscale lists dep-free; BGRA/RGB/gray arrays `skipUnless(numpy)`).
 
-Note `NumpyImageBackend`'s feature is a `(shape, mean)` pair: mean-subtracted
-correlation discriminates pieces across square colours, while the brightness
-`mean` keeps *flat* (empty) squares distinguishable — without it, empty squares
-correlate with nothing and get misread. The synthetic mock images never exposed
-this because their empty squares carry a pattern; the real-image test does.
+Note `NumpyImageBackend`'s feature is a `(shape, mean, coverage)` triple over
+the background-canonicalised patch: correlation discriminates piece shapes,
+brightness separates light from dark pieces, and `coverage` keeps *flat*
+(empty) squares distinguishable — without it, empty squares correlate with
+nothing and get misread. The synthetic mock images never exposed this because
+their empty squares carry a pattern; the real-image test does. The mock
+backend keeps its plain full-patch correlation (features are opaque to the
+recognizer), so background canonicalisation is exercised by the real-image
+tests, including the highlighted-squares cases in `test_filter_real_images`.
 
 ### Import boundary (important)
 

@@ -19,10 +19,12 @@ It works on **any** board, not just a particular site or piece set, as long as:
 - each piece looks identical on every square it occupies.
 
 The pieces need not look like traditional chess pieces — only be consistent.
-Matching is colour-aware (a square is only compared against templates of its
-own colour), and the piece-on-opposite-colour appearances that the starting
-position never shows (kings and queens) are synthesised from it by repainting
-the empty background, so any later position is read correctly.
+Matching considers **only the shape and colour of the pieces, never the
+square colour**: every square is first canonicalised against its own
+background (estimated from the square's border), so the tints chess UIs
+paint on squares — a selection highlight, the persistent last-move
+highlight — do not throw off tracking. Moves onto highlighted squares are
+recognised just like moves onto clean ones.
 
 ### Robustness to visual noise
 

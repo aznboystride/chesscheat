@@ -3,8 +3,12 @@
 Loads the committed fixture board images and injects synthetic visual
 artifacts — a cursor cross, a highlight tint on the last-moved squares —
 then verifies the filter rejects corrupted frames while still accepting
-every genuine move in the opening.  Skipped when numpy, Pillow, or
-python-chess are absent.
+every genuine move in the opening.  Also verifies the opposite requirement:
+*legitimate* square highlights (a chess UI tinting the last move's squares
+underneath the pieces, persistently) must NOT block recognition — moves on
+highlighted squares are accepted because matching considers only the shape
+and colour of the pieces, never the square colour.  Skipped when numpy,
+Pillow, or python-chess are absent.
 """
 
 import os
@@ -33,6 +37,63 @@ EXPECTED_FEN = {
 }
 
 
+PIECES_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "pieces")
+
+# Mirrors tests/fixtures/generate_boards.py so highlighted variants of the
+# fixture boards can be composed at test time.
+SQUARE = 64
+THEMES = {
+    "wikipedia": ((240, 217, 181), (181, 136, 99)),
+    "alpha": ((235, 236, 208), (119, 149, 86)),
+    "merida": ((222, 227, 230), (140, 162, 173)),
+}
+PIECE_FILE = {
+    "P": "wP", "N": "wN", "B": "wB", "R": "wR", "Q": "wQ", "K": "wK",
+    "p": "bP", "n": "bN", "b": "bB", "r": "bR", "q": "bQ", "k": "bK",
+}
+HIGHLIGHT = (205, 210, 106)  # a lichess-like last-move yellow-green
+
+
+def _render_highlighted(piece_set, board_map, highlighted_squares):
+    """Compose a board image with some squares tinted *under* the pieces.
+
+    This reproduces how real chess UIs draw last-move/selection highlights:
+    the square's background colour changes, the piece artwork on top does
+    not.
+
+    Args:
+        piece_set: Piece-set directory name.
+        board_map: A ``{(file_idx, rank): label}`` map (white's perspective).
+        highlighted_squares: Iterable of ``(file_idx, rank)`` squares whose
+            background is replaced by the highlight colour.
+
+    Returns:
+        The composed board as an ``(H, W, 3)`` uint8 numpy array.
+    """
+    from PIL import Image
+
+    highlighted = set(highlighted_squares)
+    light, dark = THEMES[piece_set]
+    pieces = {
+        label: Image.open(os.path.join(PIECES_DIR, piece_set, f"{name}.png"))
+                    .convert("RGBA").resize((SQUARE, SQUARE))
+        for label, name in PIECE_FILE.items()
+    }
+    image = Image.new("RGB", (8 * SQUARE, 8 * SQUARE))
+    for file_idx in range(8):
+        for rank in range(1, 9):
+            col, row = file_idx, 8 - rank
+            colour = (HIGHLIGHT if (file_idx, rank) in highlighted
+                      else light if (file_idx + rank) % 2 == 0 else dark)
+            tile = Image.new("RGB", (SQUARE, SQUARE), colour)
+            image.paste(tile, (col * SQUARE, row * SQUARE))
+            label = board_map.get((file_idx, rank), ".")
+            if label != ".":
+                piece = pieces[label]
+                image.paste(piece, (col * SQUARE, row * SQUARE), piece)
+    return np.array(image)
+
+
 def _load(piece_set, name):
     """Load a board fixture as an RGB numpy array.
 
@@ -45,6 +106,23 @@ def _load(piece_set, name):
     """
     path = os.path.join(BOARDS_DIR, piece_set, f"{name}.png")
     return np.array(Image.open(path).convert("RGB"))
+
+
+def _position(*uci_moves):
+    """Build a board map by pushing UCI moves from the starting position.
+
+    Args:
+        *uci_moves: UCI move strings applied in order.
+
+    Returns:
+        A ``{(file_idx, rank): label}`` map of all 64 squares.
+    """
+    game = _chess.Board()
+    for uci in uci_moves:
+        game.push_uci(uci)
+    return {(f, r): (game.piece_at(_chess.square(f, r - 1)).symbol()
+                     if game.piece_at(_chess.square(f, r - 1)) else ".")
+            for f in range(8) for r in range(1, 9)}
 
 
 def _cursor_over_square(image, row, col):
@@ -187,6 +265,52 @@ class FilterRealImagesTests(unittest.TestCase):
                     board.to_fen(result), EXPECTED_FEN["start"],
                     f"{piece_set}: highlight artifact was not rejected",
                 )
+
+    def test_move_onto_highlighted_squares_is_accepted(self):
+        """Persistent last-move highlights must not block move tracking.
+
+        Chess UIs keep the last move's from/to squares tinted until the next
+        move, so the frame showing a new position *always* carries two
+        highlighted squares. Matching only the pieces (never the square
+        colour) means those frames still read correctly and the move is
+        accepted rather than dropped forever.
+        """
+        for piece_set in ["wikipedia", "alpha", "merida"]:
+            with self.subTest(piece_set=piece_set):
+                rec = self._make_and_calibrate(piece_set)
+
+                # 1.e4 with e2/e4 highlighted, as a real UI would show it.
+                e4 = _position("e2e4")
+                frame = _render_highlighted(piece_set, e4,
+                                            [(4, 2), (4, 4)])
+                self.assertEqual(board.to_fen(rec.read(frame)),
+                                 EXPECTED_FEN["e4"],
+                                 f"{piece_set}: highlighted e4 not accepted")
+
+                # 1...c5: highlights move to c7/c5, e-file squares clear.
+                c5 = _position("e2e4", "c7c5")
+                frame = _render_highlighted(piece_set, c5,
+                                            [(2, 7), (2, 5)])
+                self.assertEqual(board.to_fen(rec.read(frame)),
+                                 EXPECTED_FEN["c5"],
+                                 f"{piece_set}: highlighted c5 not accepted")
+
+    def test_selection_highlight_reads_as_unchanged_position(self):
+        """A selection tint under a piece must not change the reading."""
+        for piece_set in ["wikipedia", "alpha", "merida"]:
+            with self.subTest(piece_set=piece_set):
+                rec = self._make_and_calibrate(piece_set)
+
+                # The user clicked the e2 pawn: its square is tinted, the
+                # position is still the starting position.
+                frame = _render_highlighted(piece_set, _position(),
+                                            [(4, 2)])
+                self.assertEqual(board.to_fen(rec.read(frame)),
+                                 EXPECTED_FEN["start"])
+
+                # The next genuine move is still tracked.
+                self.assertEqual(board.to_fen(rec.read(_load(piece_set, "e4"))),
+                                 EXPECTED_FEN["e4"])
 
     def test_multiple_artifacts_then_resume(self):
         """After several artifact frames, the game continues correctly."""
