@@ -170,16 +170,23 @@ def main():
 
     setup = FallbackSetupProvider(GuiSetupProvider(), PromptSetupProvider())
 
-    on_board, console_frame, on_event = _console_ui(
+    console_board, console_frame, on_event = _console_ui(
         "Calibrated 64 squares -- watching the board. Press Ctrl+C to stop.")
     recognizer = LegalMoveFilter(
         TemplateBoardRecognizer(NumpyImageBackend(),
                                 on_progress=_calibration_progress),
         on_event=on_event)
     preview = LivePreview()
+    detected = {"board": None, "white": True}
+
+    def on_board(board_map, playing_white):
+        detected["board"], detected["white"] = board_map, playing_white
+        console_board(board_map, playing_white)
 
     def on_frame(image):
-        preview.show(image)
+        # Annotate the capture with the last accepted reading; the filter's
+        # state only changes on accepted moves, so this is the live position.
+        preview.show(image, detected["board"], detected["white"])
         console_frame(image)
 
     run(setup, ScreenFrameSource, recognizer,

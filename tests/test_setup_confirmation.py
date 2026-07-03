@@ -137,8 +137,8 @@ class LivePreviewTests(unittest.TestCase):
 
         preview = LivePreview()
         with mock.patch.dict("sys.modules", {"tkinter": None}):
-            preview.show([[0, 1], [2, 3]])   # must not raise
-            preview.show([[0, 1], [2, 3]])
+            preview.show([[0, 1], [2, 3]], board.starting_board(), True)
+            preview.show([[0, 1], [2, 3]])   # must not raise either way
         self.assertTrue(preview.disabled)
 
     def test_close_is_idempotent(self):
@@ -149,6 +149,47 @@ class LivePreviewTests(unittest.TestCase):
         preview.close()
         self.assertTrue(preview.disabled)
         preview.show([[0]])   # no-op after close, must not raise
+
+
+class AnnotationTests(unittest.TestCase):
+    """Overlay specs mark every detected piece with its name (dep-free)."""
+
+    def test_every_piece_gets_one_annotation(self):
+        from chesscheat.gui.live_preview import annotations
+
+        specs = annotations(board.starting_board(), True, 512, 512)
+        self.assertEqual(len(specs), 32)
+        names = {spec[4] for spec in specs}
+        self.assertEqual(names, {"pawn", "knight", "bishop",
+                                 "rook", "queen", "king"})
+
+    def test_annotation_locates_the_square(self):
+        from chesscheat.gui.live_preview import annotations
+
+        # Only a white knight on g1: white view -> row 7, col 6 of 64px cells.
+        specs = annotations({(6, 1): "N"}, True, 512, 512)
+        self.assertEqual(specs, [(384.0, 448.0, 448.0, 512.0,
+                                  "knight", True)])
+
+    def test_orientation_flips_for_black(self):
+        from chesscheat.gui.live_preview import annotations
+
+        # From black's perspective g1 appears at row 0, col 1.
+        specs = annotations({(6, 1): "N"}, False, 512, 512)
+        self.assertEqual(specs, [(64.0, 0.0, 128.0, 64.0, "knight", True)])
+
+    def test_piece_colour_is_reported(self):
+        from chesscheat.gui.live_preview import annotations
+
+        specs = annotations({(0, 1): "R", (0, 8): "r"}, True, 80, 80)
+        by_white = {is_white for *_rest, is_white in specs}
+        self.assertEqual(by_white, {True, False})
+
+    def test_no_detections_no_annotations(self):
+        from chesscheat.gui.live_preview import annotations
+
+        self.assertEqual(annotations(None, True, 512, 512), [])
+        self.assertEqual(annotations({}, True, 512, 512), [])
 
 
 class PpmEncodingTests(unittest.TestCase):

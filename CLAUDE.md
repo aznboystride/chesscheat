@@ -190,8 +190,12 @@ reading via `on_board`.
 board + FEN, a timestamped recent-activity log fed by the filter's
 `on_event`, and a capture-rate line refreshed every frame) plus a
 `LivePreview` window (`gui/live_preview.py`) showing each raw capture with
-the fps in its title; the preview self-disables on any Tk failure rather
-than break the loop. `tests/test_recognition.py` injects
+the fps in its title and every detected piece highlighted -- square outlined
+plus a name chip ("knight" etc., white/black chip per side), computed by the
+pure `annotations()` helper (dep-free testable) from the filter's last
+accepted state and drawn as Canvas overlays; the preview self-disables on
+any Tk failure rather than break the loop. `board.piece_name` maps a piece
+letter to its name. `tests/test_recognition.py` injects
 mocks to verify positions evolving over time are recognised exactly.
 
 ### Tests (`tests/`)
