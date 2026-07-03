@@ -11,12 +11,18 @@ pipeline be exercised on positions evolving over time.
 from chesscheat.mocks.mock_setup_provider import MockSetupProvider
 from chesscheat.mocks.mock_frame_source import MockFrameSource
 from chesscheat.mocks.mock_image_backend import MockImageBackend
+from chesscheat.mocks.mock_move_engine import MockMoveEngine
+from chesscheat.mocks.mock_move_actuator import MockMoveActuator
+from chesscheat.mocks.mock_move_trigger import MockMoveTrigger
 from chesscheat.mocks.synthetic_image import render_mock_image, LABELS
 
 __all__ = [
     "MockSetupProvider",
     "MockFrameSource",
     "MockImageBackend",
+    "MockMoveEngine",
+    "MockMoveActuator",
+    "MockMoveTrigger",
     "render_mock_image",
     "LABELS",
 ]

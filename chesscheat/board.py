@@ -7,6 +7,7 @@ coordinates are ``(file_idx, rank)`` with file_idx 0=a..7=h and rank 1..8.
 """
 
 BACK_RANK = ["R", "N", "B", "Q", "K", "B", "N", "R"]
+FILES = "abcdefgh"
 
 _PIECE_NAMES = {"p": "pawn", "n": "knight", "b": "bishop",
                 "r": "rook", "q": "queen", "k": "king"}
@@ -44,6 +45,50 @@ def square_coord(row, col, playing_white):
     if playing_white:
         return col, 8 - row
     return 7 - col, row + 1
+
+
+def cell_of(file_idx, rank, playing_white):
+    """Convert chess coordinates back to a screen grid cell.
+
+    The inverse of ``square_coord``: given a chess square and the board
+    orientation, return where it sits in the 8x8 screen grid.
+
+    Args:
+        file_idx: File index, 0=a..7=h.
+        rank: Rank, 1..8.
+        playing_white: True if the board is shown from white's perspective.
+
+    Returns:
+        A ``(row, col)`` tuple with row 0 at the top and col 0 at the left.
+    """
+    if playing_white:
+        return 8 - rank, file_idx
+    return rank - 1, 7 - file_idx
+
+
+def square_name(file_idx, rank):
+    """Return the algebraic name of a square.
+
+    Args:
+        file_idx: File index, 0=a..7=h.
+        rank: Rank, 1..8.
+
+    Returns:
+        The square in algebraic notation, e.g. ``"e4"``.
+    """
+    return f"{FILES[file_idx]}{rank}"
+
+
+def parse_square(name):
+    """Parse an algebraic square name into chess coordinates.
+
+    Args:
+        name: A square in algebraic notation, e.g. ``"e4"``.
+
+    Returns:
+        A ``(file_idx, rank)`` tuple.
+    """
+    return FILES.index(name[0]), int(name[1])
 
 
 def start_label(file_idx, rank):
@@ -140,3 +185,50 @@ def to_fen(board):
         return "".join(parts)
 
     return "/".join(rank_to_fen(rank) for rank in range(8, 0, -1))
+
+
+def castling_field(board):
+    """Infer FEN castling rights from where the kings and rooks sit.
+
+    A right is granted only when the king and the relevant rook are both on
+    their home squares. This can over-grant if a piece returned home after
+    moving, but for an image-only reader it keeps engine suggestions sane
+    without needing move history.
+
+    Args:
+        board: A ``{(file_idx, rank): label}`` map.
+
+    Returns:
+        The FEN castling field in ``KQkq`` order, or ``"-"`` if none apply.
+    """
+    rights = []
+    if board.get((4, 1)) == "K":
+        if board.get((7, 1)) == "R":
+            rights.append("K")
+        if board.get((0, 1)) == "R":
+            rights.append("Q")
+    if board.get((4, 8)) == "k":
+        if board.get((7, 8)) == "r":
+            rights.append("k")
+        if board.get((0, 8)) == "r":
+            rights.append("q")
+    return "".join(rights) or "-"
+
+
+def to_full_fen(board, white_to_move):
+    """Build a complete FEN from a board map and whose turn it is.
+
+    The placement is canonical (white view); castling rights are inferred
+    from piece positions; en passant is left unknown (``"-"``) and the clocks
+    are set to a neutral ``0 1``. This is enough for an engine to pick a move.
+
+    Args:
+        board: A ``{(file_idx, rank): label}`` map.
+        white_to_move: True if it is white's turn, False for black's.
+
+    Returns:
+        A full FEN string, e.g.
+        ``"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"``.
+    """
+    side = "w" if white_to_move else "b"
+    return f"{to_fen(board)} {side} {castling_field(board)} - 0 1"
