@@ -86,6 +86,57 @@ class EvolvingPositionTests(unittest.TestCase):
         self.assertEqual(collect_reads([start, pushed], True)[0], pushed)
 
 
+class ScoredReadingTests(unittest.TestCase):
+    """``read`` records per-square best scores and marks unknowns."""
+
+    def _corrupt(self, image, row, col):
+        """Overwrite one square of a rendered image with an alien pattern."""
+        cell = len(image) // 8
+        for i in range(cell):
+            for j in range(cell):
+                image[row * cell + i][col * cell + j] = (i * 37 + j * 11) % 251
+        return image
+
+    def test_unknown_marked_below_threshold(self):
+        recognizer = TemplateBoardRecognizer(MockImageBackend(),
+                                             match_threshold=0.99)
+        start = board.starting_board()
+        recognizer.calibrate(render_mock_image(start, True), True)
+
+        image = self._corrupt(render_mock_image(start, True), 3, 4)  # e5
+        result = recognizer.read(image)
+
+        label, score = recognizer.last_scored[(4, 5)]
+        self.assertEqual(label, "?")
+        self.assertLess(score, 0.99)
+        # Untouched squares match their templates exactly.
+        label, score = recognizer.last_scored[(0, 1)]
+        self.assertEqual(label, "R")
+        self.assertAlmostEqual(score, 1.0)
+        # The returned map still carries the best guess, never '?'.
+        self.assertNotIn("?", result.values())
+
+    def test_no_threshold_trusts_every_match(self):
+        recognizer = TemplateBoardRecognizer(MockImageBackend())
+        start = board.starting_board()
+        recognizer.calibrate(render_mock_image(start, True), True)
+        recognizer.read(self._corrupt(render_mock_image(start, True), 3, 4))
+        self.assertNotIn("?", (label for label, _ in
+                               recognizer.last_scored.values()))
+
+    def test_clean_reading_has_no_unknowns_and_full_scores(self):
+        recognizer = TemplateBoardRecognizer(MockImageBackend(),
+                                             match_threshold=0.9)
+        start = board.starting_board()
+        recognizer.calibrate(render_mock_image(start, True), True)
+        result = recognizer.read(render_mock_image(start, True))
+        self.assertEqual(result, start)
+        self.assertEqual(len(recognizer.last_scored), 64)
+        for square, (label, score) in recognizer.last_scored.items():
+            self.assertEqual(label, start[square])
+            self.assertGreaterEqual(score, 0.9)
+
+
 class FrameCallbackTests(unittest.TestCase):
     def test_on_frame_sees_every_read_frame(self):
         positions = opening_sequence()

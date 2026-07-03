@@ -31,11 +31,13 @@ class GuiSetupProvider(SetupProvider):
         from chesscheat.gui import dialogs
         return dialogs.select_box()
 
-    def confirm_box(self, image):
-        """Show the captured region with Looks good / Reselect buttons.
+    def confirm_box(self, image, playing_white=True):
+        """Show the annotated capture with Looks good / Reselect buttons.
 
         Args:
             image: The frame captured from the selected bounding box.
+            playing_white: The side the user picked; orients the expected
+                starting-layout annotations drawn over the capture.
 
         Returns:
             True if the user confirms the capture, False to reselect.
@@ -44,4 +46,4 @@ class GuiSetupProvider(SetupProvider):
             SystemExit: If the user cancels the dialog.
         """
         from chesscheat.gui import dialogs
-        return dialogs.confirm_box(image)
+        return dialogs.confirm_box(image, playing_white)

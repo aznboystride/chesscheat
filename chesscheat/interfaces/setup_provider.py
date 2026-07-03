@@ -24,12 +24,15 @@ class SetupProvider(ABC):
         """
 
     @abstractmethod
-    def confirm_box(self, image):
+    def confirm_box(self, image, playing_white=True):
         """Show what the selected region captured and ask to proceed.
 
         Args:
             image: The frame captured from the selected bounding box, in
                 whatever representation the pipeline's frame source produces.
+            playing_white: The side chosen via ``select_side``; lets the
+                confirmation annotate the capture with the expected starting
+                layout in the right orientation.
 
         Returns:
             True to proceed with this region, False to select it again.

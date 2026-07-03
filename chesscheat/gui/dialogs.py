@@ -213,15 +213,19 @@ def select_box():
     return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
 
 
-def confirm_box(image):
+def confirm_box(image, playing_white=True):
     """Show the captured region and ask whether it looks right.
 
     Displays ``image`` (the frame grabbed from the selected bounding box) in
     a window with **Looks good** and **Reselect** buttons, so the user can
-    verify the crop covers exactly the board before the reader starts.
+    verify the crop covers exactly the board before the reader starts. The
+    capture is annotated with the expected starting layout -- every piece
+    outlined and named, every empty square labelled with its colour -- so a
+    misaligned selection is obvious: the labels will not sit on the pieces.
 
     Args:
         image: The frame captured from the selected bounding box.
+        playing_white: The side the user picked; orients the annotations.
 
     Returns:
         True if the user confirms the capture, False to reselect the region.
@@ -231,14 +235,19 @@ def confirm_box(image):
     """
     import tkinter as tk
 
+    from chesscheat import board
+    from chesscheat.gui import overlays
+
     answer = {"ok": None}
 
     root = tk.Tk()
     root.title("Confirm the captured board")
 
     tk.Label(root, text="Is this exactly the board, with the pieces in the"
-                        " starting position?\nCalibration begins as soon as"
-                        " you confirm.",
+                        " starting position?\nEach square is labelled with"
+                        " what it should contain -- check the labels sit on"
+                        " the pieces.\nCalibration begins as soon as you"
+                        " confirm.",
              font=("Helvetica", 13)).pack(pady=(14, 8))
 
     photo = tk.PhotoImage(master=root, data=_image_to_ppm(image))
@@ -248,7 +257,13 @@ def confirm_box(image):
     factor = max(1, -(-photo.width() // max_w), -(-photo.height() // max_h))
     if factor > 1:
         photo = photo.subsample(factor, factor)
-    tk.Label(root, image=photo, borderwidth=2, relief="solid").pack(padx=14)
+    canvas = tk.Canvas(root, width=photo.width(), height=photo.height(),
+                       highlightthickness=0, borderwidth=2, relief="solid")
+    canvas.pack(padx=14)
+    canvas.create_image(0, 0, anchor="nw", image=photo)
+    overlays.draw(canvas, overlays.annotations(
+        board.starting_board(), playing_white,
+        photo.width(), photo.height()))
 
     if sys.platform == "darwin":
         # Without Screen Recording permission macOS returns only the desktop

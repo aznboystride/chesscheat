@@ -26,17 +26,23 @@ paint on squares — a selection highlight, the persistent last-move
 highlight — do not throw off tracking. Moves onto highlighted squares are
 recognised just like moves onto clean ones.
 
-### Robustness to visual noise
+### Evaluation and confidence
 
-Raw template matching can be corrupted by transient artifacts — a mouse
-cursor over a square, a last-move highlight, a piece mid-drag. The live
-reader therefore runs the recognizer behind a **legal-move filter**
-(`LegalMoveFilter`): it tracks the game with a chess rule engine
-([python-chess](https://pypi.org/project/chess/)) and accepts a new reading
-only when it equals the current position or is exactly one legal move away
-(including castling, en passant, and promotion). A frame that no legal move
-can explain is discarded and the last good position is kept, so noisy frames
-heal themselves instead of corrupting the state.
+Every screenshot is evaluated **purely from the image**: each of the 64
+squares is compared against the templates learned from the starting
+position using **SSIM** (structural similarity), computed per colour channel
+over the background-canonicalised square — so both the shape and the colour
+of a piece must match. No chess-rules filtering is applied; what you see is
+what the image says.
+
+Each square's best match carries its SSIM score. If the best score falls
+below the confidence threshold, the square is shown as **unknown** with the
+score, rather than silently guessing — a mouse cursor or a piece mid-drag
+shows up as an unknown square for a frame instead of corrupting the reading.
+
+(A `LegalMoveFilter` decorator that additionally validates readings against
+legal chess moves is available in `chesscheat.recognition` for stricter
+game tracking, but the live reader does not use it.)
 
 ## Requirements
 
@@ -82,7 +88,10 @@ The program opens a small GUI to configure itself:
    you can click and move pieces normally.
 3. **Confirm the capture** — a window shows exactly what was captured from
    the selected region, which must be the board **in the starting position**.
-   Click **Looks good** to proceed, or **Reselect** to pick the corners again.
+   The capture is annotated with the expected starting layout: every piece
+   outlined and named, every empty square labelled with its colour — if the
+   labels don't sit on the pieces, the selection is misaligned. Click
+   **Looks good** to proceed, or **Reselect** to pick the corners again.
 
 (If no display or Tk is available, it falls back to text prompts for the side,
 the corner coordinates, and a y/n capture confirmation.)
@@ -100,14 +109,14 @@ reprinting the position whenever it changes. While it runs:
 
 - a small always-on-top **live capture window** shows exactly what is being
   screenshotted in real time, with the measured frame rate in its title bar
-  (close the window to dismiss it — the reader keeps going). Every
-  **detected piece is highlighted** on the capture: its square is outlined
-  and a chip overlays the piece's name (white chips for white pieces, black
-  chips for black), so you can see at a glance what the recognizer thinks
-  each piece is;
-- the terminal shows a **recent activity** log of the filter's decisions —
-  each accepted move (in algebraic notation) and each dropped frame (visual
-  noise that no legal move explains), timestamped;
+  (close the window to dismiss it — the reader keeps going). Every square is
+  annotated with that frame's evaluation: **detected pieces** are outlined
+  with a chip naming the piece (white chips for white pieces, black chips
+  for black), **empty squares** carry a chip naming the square's colour
+  ("white"/"black"), and squares whose best match scored below the SSIM
+  threshold are marked **unknown** with the score, e.g. `unknown (0.42)`;
+- the terminal shows a timestamped **recent activity** log — each position
+  change (as a FEN) and each frame with unknown squares;
 - the last terminal line shows the live **capture rate**, updated on every
   frame, so a stall is immediately visible.
 
@@ -128,8 +137,8 @@ For example:
 FEN: rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR
 
 Recent activity:
-  [21:03:12] move: e4
-  [21:03:19] frame dropped: 2 square(s) changed but no legal move matches
+  [21:03:12] position: rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR
+  [21:03:19] unknown: 1 square(s) below SSIM 0.6
 
 capturing at 3.3 fps
 ```
