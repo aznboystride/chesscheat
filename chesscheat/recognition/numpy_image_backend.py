@@ -22,64 +22,53 @@ def _resize_nearest(arr, size):
 
 
 class NumpyImageBackend(ImageBackend):
-    """Real backend: matches squares by the shape and colour of pieces only.
+    """Real backend: SSIM matching on the shape and colour of pieces only.
 
     The square's own colour is deliberately ignored, because chess UIs tint
     squares (selection and last-move highlights) and that must not throw off
-    tracking. Each square is **canonicalised against its own background**
-    before matching:
+    the evaluation. Each square is **canonicalised against its own
+    background** before matching:
 
     - the background colour is estimated per patch as the median colour of
       the patch's border ring (pieces sit centred, so the ring is background
       -- highlighted or not);
-    - pixels close to that colour are background and are repainted to a
-      constant mid-grey; the remaining pixels are the piece, kept as-is.
+    - background pixels are repainted to a constant mid-grey; the remaining
+      (piece) pixels keep their true colours.
 
     Whatever colour the square is -- its calibrated colour or an arbitrary
     highlight -- the canonical patch looks the same, so a highlighted square
     matches the template learned from a clean one.
 
-    A canonical square's feature is a ``(shape, mean, coverage)`` triple:
-
-    - ``shape``: the mean-subtracted, unit-normalised grayscale canonical
-      patch, so its dot product is the normalised cross-correlation
-      coefficient (OpenCV's ``TM_CCOEFF_NORMED``, numpy-only -- **no cv2**);
-      it captures the piece's shape and internal texture.
-    - ``mean``: the canonical patch's average brightness, separating light
-      pieces from dark ones.
-    - ``coverage``: the fraction of piece (non-background) pixels, which
-      cleanly separates empty squares (near zero) from occupied ones without
-      referring to the square's colour at all.
-
-    ``similarity`` combines the three: correlation plus ``brightness_weight``
-    times brightness closeness plus ``coverage_weight`` times coverage
-    closeness.
+    ``similarity`` is the **structural similarity index (SSIM)** between two
+    canonical patches, computed per RGB channel (global window) and averaged
+    across channels. Working in colour makes the score sensitive to the
+    piece's colour as well as its shape: a white pawn and a black pawn share
+    a silhouette but differ in channel intensities, so their SSIM is low.
+    Two empty squares canonicalise to identical flat grey and score 1.0.
+    Scores are in ``[-1, 1]`` with 1.0 a perfect match, which gives
+    ``TemplateBoardRecognizer.match_threshold`` a meaningful scale.
 
     Attributes:
         size: Side length each square is normalised to before matching.
         margin: Fraction trimmed from each side of a square.
-        brightness_weight: Weight of the brightness term in ``similarity``.
-        coverage_weight: Weight of the coverage term in ``similarity``.
         background_tol: Max per-pixel colour distance to the estimated
             background for a pixel to count as background.
         recolor_tol: Max per-pixel colour distance to ``from_empty`` for a
             pixel to count as background in ``recolor``.
     """
 
-    _CANONICAL_BG = 127.0  # grey background pixels are repainted to
+    _CANONICAL_BG = 127.0     # grey that background pixels are repainted to
+    _C1 = (0.01 * 255) ** 2   # standard SSIM stabilising constants
+    _C2 = (0.03 * 255) ** 2
 
-    def __init__(self, size=48, margin=0.12, brightness_weight=0.5,
-                 coverage_weight=0.5, background_tol=40, recolor_tol=40):
+    def __init__(self, size=48, margin=0.12, background_tol=40,
+                 recolor_tol=40):
         """Initialise the backend.
 
         Args:
             size: Side length each square is normalised to before matching.
             margin: Fraction trimmed from each side of a square to drop
                 borders and coordinate labels.
-            brightness_weight: Weight of the brightness-closeness term
-                relative to the shape-correlation term in ``similarity``.
-            coverage_weight: Weight of the coverage-closeness term relative
-                to the shape-correlation term in ``similarity``.
             background_tol: Max per-pixel colour distance (summed over
                 channels) to the border-estimated background for a pixel to
                 be canonicalised away as background.
@@ -88,8 +77,6 @@ class NumpyImageBackend(ImageBackend):
         """
         self.size = size
         self.margin = margin
-        self.brightness_weight = brightness_weight
-        self.coverage_weight = coverage_weight
         self.background_tol = background_tol
         self.recolor_tol = recolor_tol
 
@@ -114,15 +101,14 @@ class NumpyImageBackend(ImageBackend):
         return inner if inner.size else cell
 
     def _canonicalise(self, patch):
-        """Separate a patch into piece pixels and background.
+        """Repaint a patch's background to a constant grey, keeping the piece.
 
         Args:
             patch: A square crop from ``get_square`` (grayscale or colour).
 
         Returns:
-            A ``(canonical, coverage)`` pair: ``canonical`` is the resized
-            grayscale patch with background pixels repainted to a constant
-            grey, and ``coverage`` is the fraction of piece pixels.
+            The resized colour patch with background pixels repainted, as a
+            ``(size, size, 3)`` float array.
         """
         import numpy as np
 
@@ -139,9 +125,7 @@ class NumpyImageBackend(ImageBackend):
         background = np.median(border, axis=0)
 
         is_piece = np.abs(arr - background).sum(axis=-1) > self.background_tol
-        gray = arr.mean(axis=-1)
-        canonical = np.where(is_piece, gray, self._CANONICAL_BG)
-        return canonical, float(is_piece.mean())
+        return np.where(is_piece[..., None], arr, self._CANONICAL_BG)
 
     def feature(self, patch):
         """Reduce a square to a background-independent feature.
@@ -150,41 +134,34 @@ class NumpyImageBackend(ImageBackend):
             patch: A square crop from ``get_square`` (grayscale or colour).
 
         Returns:
-            A ``(shape, mean, coverage)`` triple: ``shape`` is a
-            unit-normalised, mean-subtracted numpy vector of the canonicalised
-            patch (the zero vector for an empty square); ``mean`` is its
-            average intensity scaled to ``[0, 1]``; ``coverage`` is the
-            fraction of piece pixels.
+            A ``(canonical, mean, variance)`` triple: the canonicalised
+            colour patch plus its per-channel mean and variance, precomputed
+            for the SSIM in ``similarity``.
         """
-        import numpy as np
-
-        canonical, coverage = self._canonicalise(patch)
-        vec = canonical.ravel()
-        centered = vec - vec.mean()
-        norm = np.linalg.norm(centered)
-        shape = centered / norm if norm else centered
-        return shape, vec.mean() / 255.0, coverage
+        canonical = self._canonicalise(patch)
+        flat = canonical.reshape(-1, 3)
+        return canonical, flat.mean(axis=0), flat.var(axis=0)
 
     def similarity(self, feature_a, feature_b):
-        """Score two features by shape, brightness and coverage closeness.
+        """Return the channel-averaged SSIM of two canonical patches.
 
         Args:
-            feature_a: A ``(shape, mean, coverage)`` triple from ``feature``.
-            feature_b: Another ``(shape, mean, coverage)`` triple.
+            feature_a: A ``(canonical, mean, variance)`` triple from
+                ``feature``.
+            feature_b: Another such triple.
 
         Returns:
-            ``corr + brightness_weight * (1 - |mean_a - mean_b|) +
-            coverage_weight * (1 - |coverage_a - coverage_b|)`` as a float,
-            where ``corr`` is the dot product of the shape vectors.
+            The mean over RGB channels of the global-window SSIM, as a float
+            in ``[-1, 1]``; 1.0 is a perfect match. Colour differences lower
+            the score, so piece colour is part of the match.
         """
-        import numpy as np
-
-        shape_a, mean_a, coverage_a = feature_a
-        shape_b, mean_b, coverage_b = feature_b
-        corr = float(np.dot(shape_a, shape_b))
-        return (corr
-                + self.brightness_weight * (1.0 - abs(mean_a - mean_b))
-                + self.coverage_weight * (1.0 - abs(coverage_a - coverage_b)))
+        patch_a, mu_a, var_a = feature_a
+        patch_b, mu_b, var_b = feature_b
+        cov = (patch_a * patch_b).reshape(-1, 3).mean(axis=0) - mu_a * mu_b
+        ssim = (((2 * mu_a * mu_b + self._C1) * (2 * cov + self._C2))
+                / ((mu_a ** 2 + mu_b ** 2 + self._C1)
+                   * (var_a + var_b + self._C2)))
+        return float(ssim.mean())
 
     def recolor(self, patch, from_empty, to_empty):
         """Repaint background pixels from one empty colour to another.

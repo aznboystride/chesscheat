@@ -3,50 +3,20 @@
 import collections
 import time
 
-from chesscheat import board
-
-
-def annotations(board_map, playing_white, width, height):
-    """Compute the piece overlays to draw on a captured board frame.
-
-    Pure geometry: for every detected piece, one annotation locating its
-    square on the image plus the piece's display name.
-
-    Args:
-        board_map: A ``{(file_idx, rank): label}`` map of detected pieces
-            (``'.'`` marks an empty square), or None for no detections.
-        playing_white: True if the frame shows the board from white's
-            perspective (matches how the board was calibrated).
-        width: Frame width in pixels.
-        height: Frame height in pixels.
-
-    Returns:
-        A list of ``(x0, y0, x1, y1, name, is_white_piece)`` tuples, one per
-        detected piece: the square's pixel bounding box, the piece's name
-        (e.g. ``'knight'``), and whether the piece is white.
-    """
-    if not board_map:
-        return []
-    cell_w, cell_h = width / 8, height / 8
-    return [
-        (col * cell_w, row * cell_h, (col + 1) * cell_w, (row + 1) * cell_h,
-         board.piece_name(label), label.isupper())
-        for row in range(8) for col in range(8)
-        for label in [board_map.get(board.square_coord(row, col,
-                                                       playing_white), ".")]
-        if label != "."
-    ]
+from chesscheat.gui import overlays
 
 
 class LivePreview:
     """A window surfacing each captured frame in real time, with the rate.
 
-    Call ``show(image, board_map, playing_white)`` with every grabbed frame:
+    Call ``show(image, scored_map, playing_white)`` with every grabbed frame:
     the first call opens a small always-on-top window, and each call
     refreshes it with the latest capture and puts the measured frame rate in
-    the title bar. Every **detected piece is highlighted** on the capture --
-    its square outlined and a chip overlaid with the piece's name (white
-    chips for white pieces, black chips for black pieces).
+    the title bar. Every square of the reading is annotated on the capture
+    (see ``chesscheat.gui.overlays``): detected pieces are outlined and named,
+    empty squares carry a "white"/"black" chip for their square colour, and
+    squares whose best match scored below the recognizer's threshold are
+    marked ``unknown`` with the score.
 
     The window is driven by explicit ``update()`` pumping (no ``mainloop``),
     so it works from inside the reader's synchronous loop. If Tk is
@@ -97,33 +67,15 @@ class LivePreview:
                                  borderwidth=2, relief="solid")
         self._canvas.pack()
 
-    def _draw_annotations(self, board_map, playing_white):
-        """Overlay the detected pieces on the current canvas image.
-
-        Args:
-            board_map: The detected ``{(file_idx, rank): label}`` map.
-            playing_white: Whether the frame is from white's perspective.
-        """
-        for x0, y0, x1, y1, name, is_white in annotations(
-                board_map, playing_white,
-                self._photo.width(), self._photo.height()):
-            self._canvas.create_rectangle(x0 + 1, y0 + 1, x1 - 1, y1 - 1,
-                                          outline="#22cc55", width=2)
-            chip, text = (("white", "black") if is_white
-                          else ("black", "white"))
-            self._canvas.create_rectangle(x0 + 2, y1 - 15, x1 - 2, y1 - 2,
-                                          fill=chip, outline=text)
-            self._canvas.create_text((x0 + x1) / 2, y1 - 8, text=name,
-                                     fill=text, font=("Helvetica", 9))
-
-    def show(self, image, board_map=None, playing_white=True):
+    def show(self, image, scored_map=None, playing_white=True):
         """Display a captured frame, opening the window if needed.
 
         Args:
             image: The captured frame, in any representation
                 ``chesscheat.gui.dialogs._image_to_ppm`` accepts.
-            board_map: Optional ``{(file_idx, rank): label}`` map of detected
-                pieces to highlight on the frame; None draws no overlays.
+            scored_map: Optional ``{(file_idx, rank): (label, score)}`` map
+                (a recognizer's scored reading; plain labels also accepted)
+                to annotate on the frame; None draws no overlays.
             playing_white: Whether the frame shows the board from white's
                 perspective; orients the overlays.
         """
@@ -142,7 +94,10 @@ class LivePreview:
                                 height=self._photo.height())
             self._canvas.delete("all")
             self._canvas.create_image(0, 0, anchor="nw", image=self._photo)
-            self._draw_annotations(board_map, playing_white)
+            overlays.draw(self._canvas,
+                          overlays.annotations(scored_map, playing_white,
+                                               self._photo.width(),
+                                               self._photo.height()))
             self._root.title(f"{self._title} — {self._rate_text()}")
             self._root.update()
         except Exception:

@@ -38,7 +38,7 @@ class PromptSetupProvider(SetupProvider):
         x2, y2 = ask("bottom-right")
         return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
 
-    def confirm_box(self, image):
+    def confirm_box(self, image, playing_white=True):
         """Report the capture's dimensions and ask y/n to proceed.
 
         A terminal cannot display the capture itself, so the user is told its
@@ -46,6 +46,7 @@ class PromptSetupProvider(SetupProvider):
 
         Args:
             image: The frame captured from the selected bounding box.
+            playing_white: Unused; a terminal shows no annotations.
 
         Returns:
             True to proceed with this region, False to select it again.

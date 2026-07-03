@@ -117,7 +117,7 @@ class FallbackConfirmTests(unittest.TestCase):
 
     def test_falls_back_when_primary_raises(self):
         class Broken(MockSetupProvider):
-            def confirm_box(self, image):
+            def confirm_box(self, image, playing_white=True):
                 raise RuntimeError("no display")
 
         secondary = MockSetupProvider(confirmations=[False])
@@ -152,41 +152,63 @@ class LivePreviewTests(unittest.TestCase):
 
 
 class AnnotationTests(unittest.TestCase):
-    """Overlay specs mark every detected piece with its name (dep-free)."""
+    """Overlay specs label every square: piece, empty colour, or unknown."""
 
-    def test_every_piece_gets_one_annotation(self):
-        from chesscheat.gui.live_preview import annotations
+    def test_every_square_gets_one_annotation(self):
+        from chesscheat.gui.overlays import annotations
 
         specs = annotations(board.starting_board(), True, 512, 512)
-        self.assertEqual(len(specs), 32)
-        names = {spec[4] for spec in specs}
-        self.assertEqual(names, {"pawn", "knight", "bishop",
-                                 "rook", "queen", "king"})
+        self.assertEqual(len(specs), 64)
+        texts = {spec[4] for spec in specs}
+        self.assertEqual(texts, {"pawn", "knight", "bishop", "rook",
+                                 "queen", "king", "white", "black"})
 
-    def test_annotation_locates_the_square(self):
-        from chesscheat.gui.live_preview import annotations
+    def test_piece_annotation_locates_the_square(self):
+        from chesscheat.gui.overlays import annotations, PIECE_OUTLINE
 
         # Only a white knight on g1: white view -> row 7, col 6 of 64px cells.
         specs = annotations({(6, 1): "N"}, True, 512, 512)
-        self.assertEqual(specs, [(384.0, 448.0, 448.0, 512.0,
-                                  "knight", True)])
+        self.assertEqual(specs, [(384.0, 448.0, 448.0, 512.0, "knight",
+                                  "white", "black", PIECE_OUTLINE)])
 
     def test_orientation_flips_for_black(self):
-        from chesscheat.gui.live_preview import annotations
+        from chesscheat.gui.overlays import annotations
 
         # From black's perspective g1 appears at row 0, col 1.
         specs = annotations({(6, 1): "N"}, False, 512, 512)
-        self.assertEqual(specs, [(64.0, 0.0, 128.0, 64.0, "knight", True)])
+        self.assertEqual(specs[0][:4], (64.0, 0.0, 128.0, 64.0))
 
-    def test_piece_colour_is_reported(self):
-        from chesscheat.gui.live_preview import annotations
+    def test_piece_colour_sets_chip_colours(self):
+        from chesscheat.gui.overlays import annotations
 
         specs = annotations({(0, 1): "R", (0, 8): "r"}, True, 80, 80)
-        by_white = {is_white for *_rest, is_white in specs}
-        self.assertEqual(by_white, {True, False})
+        chips = {(spec[5], spec[6]) for spec in specs}
+        self.assertEqual(chips, {("white", "black"), ("black", "white")})
+
+    def test_empty_squares_named_by_square_colour(self):
+        from chesscheat.gui.overlays import annotations
+
+        # a1 is a dark square, b1 light; both empty, no outline.
+        specs = annotations({(0, 1): ".", (1, 1): "."}, True, 512, 512)
+        by_text = {spec[4]: spec for spec in specs}
+        self.assertEqual(set(by_text), {"black", "white"})
+        self.assertIsNone(by_text["black"][7])
+        self.assertIsNone(by_text["white"][7])
+
+    def test_scored_tuples_and_unknowns(self):
+        from chesscheat.gui.overlays import annotations, UNKNOWN_COLOUR
+
+        scored = {(4, 4): ("P", 0.97), (3, 4): ("?", 0.42)}
+        specs = annotations(scored, True, 512, 512)
+        by_text = {spec[4]: spec for spec in specs}
+        self.assertIn("pawn", by_text)
+        self.assertIn("unknown (0.42)", by_text)
+        unknown = by_text["unknown (0.42)"]
+        self.assertEqual(unknown[5], UNKNOWN_COLOUR)   # chip fill
+        self.assertEqual(unknown[7], UNKNOWN_COLOUR)   # outline
 
     def test_no_detections_no_annotations(self):
-        from chesscheat.gui.live_preview import annotations
+        from chesscheat.gui.overlays import annotations
 
         self.assertEqual(annotations(None, True, 512, 512), [])
         self.assertEqual(annotations({}, True, 512, 512), [])

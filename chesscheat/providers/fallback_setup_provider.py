@@ -61,13 +61,15 @@ class FallbackSetupProvider(SetupProvider):
         """
         return self._try("select_box")
 
-    def confirm_box(self, image):
+    def confirm_box(self, image, playing_white=True):
         """Confirm the capture via the primary provider, else the secondary.
 
         Args:
             image: The frame captured from the selected bounding box.
+            playing_white: The side the user picked, forwarded for the
+                annotation orientation.
 
         Returns:
             True to proceed with this region, False to select it again.
         """
-        return self._try("confirm_box", image)
+        return self._try("confirm_box", image, playing_white)

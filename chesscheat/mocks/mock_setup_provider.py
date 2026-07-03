@@ -47,11 +47,12 @@ class MockSetupProvider(SetupProvider):
         self.box_requests += 1
         return self._box
 
-    def confirm_box(self, image):
+    def confirm_box(self, image, playing_white=True):
         """Return the next scripted confirmation (or True when exhausted).
 
         Args:
             image: The captured frame; recorded in ``confirmed_images``.
+            playing_white: Ignored; the mock shows nothing.
 
         Returns:
             The next boolean from ``confirmations``, or True once exhausted.

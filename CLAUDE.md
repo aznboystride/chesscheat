@@ -77,7 +77,7 @@ chesscheat/
   providers/        Gui/Prompt/Fallback SetupProvider, ScreenFrameSource
   mocks/            Mock{SetupProvider,FrameSource,ImageBackend}, synthetic_image
   capture/          screenshot
-  gui/              dialogs (select_side, select_box, confirm_box), LivePreview
+  gui/              dialogs, overlays (annotations/draw), LivePreview
 tests/              test_board, test_recognition, test_legal_move_filter, ...
 ```
 
@@ -119,23 +119,27 @@ look identical everywhere; each piece looks identical wherever it is placed.
   background to the other colour) so every piece is recognisable on either
   colour. The same algorithm runs with the real and the mock backend. Takes
   an optional ``on_progress(done, total)`` callback reporting each of the 64
-  squares learned during calibration (`main` wires a terminal progress bar).
+  squares learned during calibration (`main` wires a terminal progress bar),
+  and an optional ``match_threshold``: `read` returns the best-guess map (so
+  FEN stays valid) while ``last_scored`` holds the per-square
+  ``(label, score)`` detail with sub-threshold squares marked ``'?'`` — the
+  UI renders those as "unknown (score)".
 - `NumpyImageBackend` — real backend. Matches **only the shape and colour of
   pieces, never the square colour**: chess UIs tint squares (selection /
   last-move highlights, which persist until the next move), so each patch is
   first **canonicalised against its own background** — the background colour
   is estimated per patch as the median of the patch's border ring, and pixels
-  within `background_tol` of it are repainted to a constant grey. `feature`
-  is then a `(shape, mean, coverage)` triple of the canonical patch: `shape`
-  is a mean-subtracted, unit-normalised grayscale vector (its dot product is
-  the normalised cross-correlation coefficient, OpenCV's `TM_CCOEFF_NORMED`,
-  but numpy-only — **no `cv2`**), `mean` is brightness (light vs dark
-  pieces), and `coverage` is the piece-pixel fraction, which separates empty
-  squares from occupied ones with no reference to the square's colour.
-  `recolor` swaps a piece's background colour using the average empty
-  colours (post-canonicalisation it barely changes the feature; kept so
-  every piece has a template under both colour keys). Templates are tied to
-  the current board theme/size/position; recalibrate if any change.
+  within `background_tol` of it are repainted to a constant grey while piece
+  pixels keep their true colours. `similarity` is **SSIM** (structural
+  similarity, numpy-only — **no `cv2`/skimage**): the global-window SSIM per
+  RGB channel of the canonical patches, averaged — so piece colour is part
+  of the match (white vs black pawn scores low), two empties score 1.0, and
+  scores live in `[-1, 1]` giving thresholds a meaningful scale. `feature`
+  precomputes `(canonical, mean, variance)`. `recolor` swaps a piece's
+  background colour using the average empty colours (post-canonicalisation
+  it barely changes the feature; kept so every piece has a template under
+  both colour keys). Templates are tied to the current board
+  theme/size/position; recalibrate if any change.
 - `LegalMoveFilter(inner)` — a `BoardRecognizer` decorator that makes the
   reader robust to transient visual noise (mouse cursor, move highlights,
   drag animations). It tracks the game with **python-chess** (`chess`,
@@ -145,7 +149,10 @@ look identical everywhere; each piece looks identical wherever it is placed.
   and the last accepted board is returned. Takes an optional
   ``on_event(kind, detail)`` callback: ``("move", san)`` on acceptance,
   ``("dropped", reason)`` on rejection, nothing for unchanged frames.
-  `main` wraps the real recognizer in this filter.
+  **Not wired into `main`**: the live reader evaluates each frame purely
+  from the image (per user requirement), surfacing low-confidence squares
+  as "unknown" instead of filtering by move legality. The filter remains
+  available (and tested) for stricter game tracking.
 
 ### Real I/O implementations
 
@@ -185,18 +192,24 @@ build a fresh frame source (so scripted mock sources restart; the preview
 grab never consumes the calibration frame) → calibrate from first frame →
 for each subsequent frame, surface it raw via `on_frame` then report the
 reading via `on_board`.
-`main` injects the real implementations and wires the terminal UI
-(`_console_ui` returns `(on_board, on_frame, on_event)` sharing one display:
-board + FEN, a timestamped recent-activity log fed by the filter's
-`on_event`, and a capture-rate line refreshed every frame) plus a
-`LivePreview` window (`gui/live_preview.py`) showing each raw capture with
-the fps in its title and every detected piece highlighted -- square outlined
-plus a name chip ("knight" etc., white/black chip per side), computed by the
-pure `annotations()` helper (dep-free testable) from the filter's last
-accepted state and drawn as Canvas overlays; the preview self-disables on
-any Tk failure rather than break the loop. `board.piece_name` maps a piece
-letter to its name. `tests/test_recognition.py` injects
-mocks to verify positions evolving over time are recognised exactly.
+`run` reads each frame *before* `on_frame` so a preview can annotate the
+frame with its own scored reading. `main` injects the real implementations
+(recognizer with `match_threshold=SSIM_THRESHOLD`, no legal-move filter) and
+wires the terminal UI (`_console_ui` returns `(on_board, on_frame,
+on_event)` sharing one display: board + FEN, a timestamped recent-activity
+log — position changes and unknown-square notices — and a capture-rate line
+refreshed every frame) plus a `LivePreview` window (`gui/live_preview.py`)
+showing each raw capture with the fps in its title and **every square
+annotated** from `recognizer.last_scored`: pieces outlined with a name chip
+("knight" etc., white/black chip per side), empty squares chip-labelled by
+their square colour ("white"/"black"), sub-threshold squares marked
+"unknown (score)". The pure `annotations()` spec builder and the Tk `draw`
+helper live in `gui/overlays.py` (shared with the confirmation dialog, which
+overlays the expected starting layout so a misaligned selection is obvious);
+the preview self-disables on any Tk failure rather than break the loop.
+`board.piece_name` maps a piece letter to its name.
+`tests/test_recognition.py` injects mocks to verify positions evolving over
+time are recognised exactly.
 
 ### Tests (`tests/`)
 

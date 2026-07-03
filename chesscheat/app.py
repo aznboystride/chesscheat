@@ -31,8 +31,9 @@ def run(setup, make_frame_source, recognizer, *, on_board,
         recognizer: A ``BoardRecognizer`` to calibrate and read with.
         on_board: Callback invoked as ``(board_map, playing_white)`` for each
             read frame.
-        on_frame: Callback invoked with each raw captured frame before it is
-            recognised, e.g. to surface the live capture in a preview window.
+        on_frame: Callback invoked with each raw captured frame just after it
+            is recognised (so a preview can annotate the frame with its own
+            reading) and before ``on_board``.
         before_calibrate: Side-effect hook run just before calibration, e.g.
             to wait for the user to set up the starting position.
         interval: Seconds to sleep between frames; 0 disables sleeping.
@@ -44,7 +45,7 @@ def run(setup, make_frame_source, recognizer, *, on_board,
     playing_white = setup.select_side()
     while True:
         box = setup.select_box()
-        if setup.confirm_box(make_frame_source(box).grab()):
+        if setup.confirm_box(make_frame_source(box).grab(), playing_white):
             break
     frames = make_frame_source(box)
 
@@ -57,8 +58,9 @@ def run(setup, make_frame_source, recognizer, *, on_board,
                 image = frames.grab()
             except StopIteration:
                 break
+            reading = recognizer.read(image)
             on_frame(image)
-            on_board(recognizer.read(image), playing_white)
+            on_board(reading, playing_white)
             if interval:
                 sleeper(interval)
     except KeyboardInterrupt:
@@ -150,12 +152,18 @@ def _calibration_progress(done, total):
               "(press Ctrl+C to stop)\n", flush=True)
 
 
+# Best matches scoring below this SSIM are shown as "unknown". Genuine
+# matches score near 1.0 and the best wrong template stays under ~0.5 on the
+# fixture sets, so 0.6 separates them with margin on both sides.
+SSIM_THRESHOLD = 0.6
+
+
 def main():
     """Wire the real implementations and run the live reader."""
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
                                       FallbackSetupProvider, ScreenFrameSource)
     from chesscheat.recognition import (TemplateBoardRecognizer,
-                                        NumpyImageBackend, LegalMoveFilter)
+                                        NumpyImageBackend)
 
     print("=== Live Chessboard Reader ===")
     print("Make sure the board is in the standard starting position.\n")
@@ -172,21 +180,31 @@ def main():
 
     console_board, console_frame, on_event = _console_ui(
         "Calibrated 64 squares -- watching the board. Press Ctrl+C to stop.")
-    recognizer = LegalMoveFilter(
-        TemplateBoardRecognizer(NumpyImageBackend(),
-                                on_progress=_calibration_progress),
-        on_event=on_event)
+    # Each frame is evaluated purely from the image, matching every square
+    # (SSIM) against the templates learned from the starting position; no
+    # move-legality filtering. Low-scoring squares surface as "unknown".
+    recognizer = TemplateBoardRecognizer(NumpyImageBackend(),
+                                         on_progress=_calibration_progress,
+                                         match_threshold=SSIM_THRESHOLD)
     preview = LivePreview()
-    detected = {"board": None, "white": True}
+    seen = {"board": None, "unknown": None}
 
     def on_board(board_map, playing_white):
-        detected["board"], detected["white"] = board_map, playing_white
+        if board_map != seen["board"] and seen["board"] is not None:
+            on_event("position", board.to_fen(board_map))
+        seen["board"] = board_map
         console_board(board_map, playing_white)
 
     def on_frame(image):
-        # Annotate the capture with the last accepted reading; the filter's
-        # state only changes on accepted moves, so this is the live position.
-        preview.show(image, detected["board"], detected["white"])
+        # recognizer.read has just run for this frame, so last_scored is the
+        # scored reading of exactly this capture.
+        preview.show(image, recognizer.last_scored, recognizer.playing_white)
+        unknown = sorted(sq for sq, (label, _score)
+                         in recognizer.last_scored.items() if label == "?")
+        if unknown != seen["unknown"] and unknown:
+            on_event("unknown", f"{len(unknown)} square(s) below "
+                                f"SSIM {SSIM_THRESHOLD}")
+        seen["unknown"] = unknown
         console_frame(image)
 
     run(setup, ScreenFrameSource, recognizer,

@@ -29,9 +29,16 @@ class TemplateBoardRecognizer(BoardRecognizer):
         templates: Dict mapping ``(label, is_light)`` to a feature.
         on_progress: Optional ``(done, total)`` callback reporting calibration
             progress.
+        match_threshold: Minimum similarity for a match to be trusted; best
+            matches scoring below it are marked unknown in ``last_scored``.
+            None trusts every best match.
+        last_scored: Per-square detail of the most recent ``read``: a
+            ``{(file_idx, rank): (label, score)}`` map where ``label`` is the
+            best-matching label, or ``'?'`` when its score fell below
+            ``match_threshold``, and ``score`` is that best similarity.
     """
 
-    def __init__(self, backend, on_progress=None):
+    def __init__(self, backend, on_progress=None, match_threshold=None):
         """Initialise the recognizer.
 
         Args:
@@ -41,11 +48,18 @@ class TemplateBoardRecognizer(BoardRecognizer):
             on_progress: Optional callable invoked as ``on_progress(done,
                 total)`` after each square is learned during ``calibrate``,
                 ending with ``done == total``; e.g. to draw a progress bar.
+            match_threshold: Optional minimum similarity a best match must
+                reach to be trusted; below it the square is reported as
+                ``'?'`` in ``last_scored``. The meaningful scale depends on
+                the backend's ``similarity`` (for ``NumpyImageBackend`` it is
+                SSIM, 1.0 = perfect). None disables unknown marking.
         """
         self.backend = backend
         self.playing_white = True
         self.templates = {}  # (label, is_light) -> feature
         self.on_progress = on_progress
+        self.match_threshold = match_threshold
+        self.last_scored = {}
 
     def calibrate(self, image, playing_white):
         """Learn how each piece and empty square looks from the start position.
@@ -94,11 +108,16 @@ class TemplateBoardRecognizer(BoardRecognizer):
     def read(self, image):
         """Classify every square against same-colour templates.
 
+        Every square gets the best-matching label. The per-square best scores
+        -- with squares whose score fell below ``match_threshold`` marked
+        ``'?'`` -- are kept in ``last_scored`` for display purposes.
+
         Args:
             image: A board image to recognise.
 
         Returns:
-            A ``{(file_idx, rank): label}`` map of all 64 squares.
+            A ``{(file_idx, rank): label}`` map of all 64 squares, using the
+            best match for every square regardless of ``match_threshold``.
         """
         def classify(row, col):
             file_rank = board.square_coord(row, col, self.playing_white)
@@ -107,11 +126,19 @@ class TemplateBoardRecognizer(BoardRecognizer):
             candidates = ((label, feature)
                           for (label, tint), feature in self.templates.items()
                           if tint == light)
-            label, _ = max(
-                candidates,
-                key=lambda lf: self.backend.similarity(feat, lf[1]),
+            label, score = max(
+                ((label, self.backend.similarity(feat, feature))
+                 for label, feature in candidates),
+                key=lambda ls: ls[1],
             )
-            return file_rank, label
+            return file_rank, label, score
 
-        return dict(classify(row, col)
-                    for row in range(8) for col in range(8))
+        results = [classify(row, col)
+                   for row in range(8) for col in range(8)]
+        threshold = self.match_threshold
+        self.last_scored = {
+            file_rank: (label if threshold is None or score >= threshold
+                        else "?", score)
+            for file_rank, label, score in results
+        }
+        return {file_rank: label for file_rank, label, _ in results}
