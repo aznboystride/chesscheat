@@ -100,7 +100,11 @@ reprinting the position whenever it changes. While it runs:
 
 - a small always-on-top **live capture window** shows exactly what is being
   screenshotted in real time, with the measured frame rate in its title bar
-  (close the window to dismiss it — the reader keeps going);
+  (close the window to dismiss it — the reader keeps going). Every
+  **detected piece is highlighted** on the capture: its square is outlined
+  and a chip overlays the piece's name (white chips for white pieces, black
+  chips for black), so you can see at a glance what the recognizer thinks
+  each piece is;
 - the terminal shows a **recent activity** log of the filter's decisions —
   each accepted move (in algebraic notation) and each dropped frame (visual
   noise that no legal move explains), timestamped;

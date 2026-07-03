@@ -8,6 +8,25 @@ coordinates are ``(file_idx, rank)`` with file_idx 0=a..7=h and rank 1..8.
 
 BACK_RANK = ["R", "N", "B", "Q", "K", "B", "N", "R"]
 
+_PIECE_NAMES = {"p": "pawn", "n": "knight", "b": "bishop",
+                "r": "rook", "q": "queen", "k": "king"}
+
+
+def piece_name(label):
+    """Return the human-readable name of a piece label.
+
+    Args:
+        label: A piece letter (uppercase white, lowercase black),
+            e.g. ``'N'`` or ``'q'``.
+
+    Returns:
+        The piece's name, e.g. ``'knight'`` or ``'queen'``.
+
+    Raises:
+        KeyError: If ``label`` is not a piece letter.
+    """
+    return _PIECE_NAMES[label.lower()]
+
 
 def square_coord(row, col, playing_white):
     """Convert a screen grid cell to chess coordinates.

@@ -23,6 +23,19 @@ class SquareCoordTests(unittest.TestCase):
             self.assertEqual(len(seen), 64)
 
 
+class PieceNameTests(unittest.TestCase):
+    def test_all_piece_letters_have_names(self):
+        expected = {"P": "pawn", "N": "knight", "B": "bishop",
+                    "R": "rook", "Q": "queen", "K": "king"}
+        for letter, name in expected.items():
+            self.assertEqual(board.piece_name(letter), name)
+            self.assertEqual(board.piece_name(letter.lower()), name)
+
+    def test_non_piece_raises(self):
+        with self.assertRaises(KeyError):
+            board.piece_name(".")
+
+
 class StartLabelTests(unittest.TestCase):
     def test_back_ranks(self):
         self.assertEqual([board.start_label(f, 1) for f in range(8)],
