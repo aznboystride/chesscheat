@@ -28,7 +28,8 @@ python3 -m unittest tests.test_board.FenTests.test_after_e4
 ```
 
 There is no build step or linter config. Runtime dependencies (`mss`,
-`numpy`, `chess`) live in `requirements.txt`; `setup.sh` builds a `venv/` and
+`numpy`, `chess`, `pyautogui`, `pynput`; plus a Stockfish binary for the move
+assist) live in `requirements.txt`; `setup.sh` builds a `venv/` and
 installs them (honors a `PYTHON` env var override). Installing manually works
 too: `pip install -r requirements.txt`. The entire test suite still *runs*
 with **no** third-party deps installed: the dep-free tests exercise the mock
@@ -72,10 +73,14 @@ chesscheat/
   app.py            run() loop + main() wiring (functions)
   board.py          pure logic (functions, no classes)
   __main__.py       `python3 -m chesscheat` entry point
-  interfaces/       SetupProvider, FrameSource, ImageBackend, BoardRecognizer
+  interfaces/       SetupProvider, FrameSource, ImageBackend, BoardRecognizer,
+                    MoveEngine, MoveActuator, MoveTrigger
   recognition/      TemplateBoardRecognizer, NumpyImageBackend, LegalMoveFilter
   providers/        Gui/Prompt/Fallback SetupProvider, ScreenFrameSource
-  mocks/            Mock{SetupProvider,FrameSource,ImageBackend}, synthetic_image
+  assist/           StockfishMoveEngine, PyAutoGuiActuator, KeyTrigger,
+                    assist_move (move_pixels)
+  mocks/            Mock{SetupProvider,FrameSource,ImageBackend,MoveEngine,
+                    MoveActuator,MoveTrigger}, synthetic_image
   capture/          screenshot
   gui/              dialogs, overlays (annotations/draw), LivePreview
 tests/              test_board, test_recognition, test_legal_move_filter, ...
@@ -93,14 +98,22 @@ tests/              test_board, test_recognition, test_legal_move_filter, ...
   by a real numpy backend and a pure-Python mock backend. `recolor` repaints a
   square's empty background from one colour to another (for template synthesis).
 - `BoardRecognizer` — `calibrate(image, playing_white)`, `read(image)`.
+- `MoveEngine` — `best_move(fen)` returns the best move (UCI) for a full FEN,
+  or None. `MoveActuator` — `apply(uci, box, playing_white)` plays a move by
+  dragging the mouse. `MoveTrigger` — `start()`/`poll()`/`stop()`; `poll`
+  edge-consumes one activation (the read loop polls it once per frame).
 
 ### Core logic (`chesscheat/board.py`) — dependency-free, the source of truth
 
-`square_coord`, `start_label`, `is_light`, `starting_board`, `render`,
-`to_fen`. **Two coordinate spaces**: screen cells are `(row, col)` with row 0
-at the top; chess coords are `(file_idx 0=a, rank 1..8)`. `square_coord` is the
-single place orientation (white vs black) is handled. `to_fen` always emits the
-canonical white-view FEN regardless of perspective.
+`square_coord`, `cell_of` (its inverse), `square_name`/`parse_square`,
+`start_label`, `is_light`, `piece_name`, `starting_board`, `render`, `to_fen`,
+`castling_field`, `to_full_fen`. **Two coordinate spaces**: screen cells are
+`(row, col)` with row 0 at the top; chess coords are `(file_idx 0=a, rank
+1..8)`. `square_coord`/`cell_of` are the single place orientation (white vs
+black) is handled. `to_fen` always emits the canonical white-view FEN
+regardless of perspective; `to_full_fen(board_map, white_to_move)` appends the
+side-to-move plus castling rights inferred by `castling_field` (king+rook on
+home squares) for feeding an engine.
 
 ### Recognition (`chesscheat/recognition/`)
 
@@ -176,12 +189,37 @@ look identical everywhere; each piece looks identical wherever it is placed.
   `FallbackSetupProvider` (GUI → prompt on error; a GUI *cancel* raises
   `SystemExit`, which propagates and quits), and `ScreenFrameSource`.
 
+### Move assist (`chesscheat/assist/`)
+
+Plays the engine's best move on the user's turn. `assist_move(board_map,
+playing_white, box, engine, actuator)` (in `coordinator.py`) is pure
+orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
+`actuator.apply(uci, box, playing_white)`, returning the UCI played.
+- `StockfishMoveEngine` — locates a binary (explicit path / `STOCKFISH_PATH` /
+  `shutil.which("stockfish")`) at construction; `best_move` opens a UCI engine
+  per call via **python-chess** (`chess.engine`, lazy), returns None for an
+  invalid/finished position.
+- `PyAutoGuiActuator` — `move_pixels(uci, box, playing_white)` (pure: maps the
+  from/to squares to screen-pixel centres via `board.parse_square`/`cell_of`)
+  then `pyautogui` (lazy) moveTo → mouseDown → moveTo(duration) → mouseUp.
+  Promotion suffix ignored (site prompt not handled).
+- `KeyTrigger(key="a")` — a global `pynput` (lazy) keyboard listener in a
+  thread; a matching press sets a `threading.Event` that `poll` edge-consumes.
+- `main` builds the assist via `_build_assist`, which probes for
+  Stockfish + `pyautogui` + `pynput` and, on any `ImportError`/
+  `FileNotFoundError`, prints why and returns a no-op trigger so the reader
+  still runs. `on_trigger` calls `assist_move` and logs `("assist", …)`
+  events; engine exceptions are caught so the loop survives.
+
 ### Mocks (`chesscheat/mocks/`) — dependency-free, test the whole pipeline
 
 `MockSetupProvider`, `MockFrameSource` (scripted frames), `render_mock_image`
 (board map → synthetic grayscale image with a distinct per-piece pattern, plus
-a square-colour tint that matching ignores), and `MockImageBackend` (same
-normalised-correlation logic as the real backend, in pure Python).
+a square-colour tint that matching ignores), `MockImageBackend` (same
+normalised-correlation logic as the real backend, in pure Python), and the
+assist mocks: `MockMoveEngine` (canned move, records FENs), `MockMoveActuator`
+(records `(uci, box, playing_white)`), `MockMoveTrigger` (`fire()` queues an
+activation `poll` consumes).
 
 ### App loop (`chesscheat/app.py`)
 
@@ -193,12 +231,16 @@ grab never consumes the calibration frame) → calibrate from first frame →
 for each subsequent frame, surface it raw via `on_frame` then report the
 reading via `on_board`.
 `run` reads each frame *before* `on_frame` so a preview can annotate the
-frame with its own scored reading. `main` injects the real implementations
+frame with its own scored reading. It also accepts an optional `trigger`
+(`MoveTrigger`, started before the loop / stopped in `finally`) polled once
+per frame; on activation it calls `on_trigger(board_map, playing_white, box)`
+with the latest reading — this is the move-assist entry point. `main` injects the real implementations
 (recognizer with `match_threshold=SSIM_THRESHOLD`, no legal-move filter) and
 wires the terminal UI (`_console_ui` returns `(on_board, on_frame,
 on_event)` sharing one display: board + FEN, a timestamped recent-activity
-log — position changes and unknown-square notices — and a capture-rate line
-refreshed every frame) plus a `LivePreview` window (`gui/live_preview.py`)
+log — position changes, unknown-square notices, and assist actions — and a
+capture-rate line refreshed every frame) plus a `LivePreview` window
+(`gui/live_preview.py`)
 showing each raw capture with the fps in its title and **every square
 annotated** from `recognizer.last_scored`: pieces outlined with a name chip
 ("knight" etc., white/black chip per side), empty squares chip-labelled by
@@ -207,7 +249,8 @@ their square colour ("white"/"black"), sub-threshold squares marked
 helper live in `gui/overlays.py` (shared with the confirmation dialog, which
 overlays the expected starting layout so a misaligned selection is obvious);
 the preview self-disables on any Tk failure rather than break the loop.
-`board.piece_name` maps a piece letter to its name.
+`board.piece_name` maps a piece letter to its name. Pressing `ASSIST_KEY`
+(`"a"`) fires `on_trigger` → `assist_move`, playing the engine's best move.
 `tests/test_recognition.py` injects mocks to verify positions evolving over
 time are recognised exactly.
 
@@ -241,24 +284,32 @@ time are recognised exactly.
   loops back to reselection, the preview never consumes the calibration
   frame, prompt y/n and fallback forwarding, and `_image_to_ppm` encoding
   (grayscale lists dep-free; BGRA/RGB/gray arrays `skipUnless(numpy)`).
+- `test_assist.py` — the move assist, dep-free via mocks: `cell_of`/
+  `parse_square`/`castling_field`/`to_full_fen` helpers, `move_pixels`
+  geometry (white/black orientation, promotion suffix ignored), `assist_move`
+  (builds a side-to-move FEN, plays the move, skips the actuator on None),
+  and `run`'s trigger loop (start/stop, fired vs unfired, end-to-end through
+  engine+actuator). A `skipUnless(shutil.which("stockfish"))` case runs the
+  real `StockfishMoveEngine` (legal opening move; None at game over).
 
-Note `NumpyImageBackend`'s feature is a `(shape, mean, coverage)` triple over
-the background-canonicalised patch: correlation discriminates piece shapes,
-brightness separates light from dark pieces, and `coverage` keeps *flat*
-(empty) squares distinguishable — without it, empty squares correlate with
-nothing and get misread. The synthetic mock images never exposed this because
-their empty squares carry a pattern; the real-image test does. The mock
-backend keeps its plain full-patch correlation (features are opaque to the
-recognizer), so background canonicalisation is exercised by the real-image
-tests, including the highlighted-squares cases in `test_filter_real_images`.
+Note `NumpyImageBackend`'s SSIM feature is `(canonical, mean, variance)` over
+the background-canonicalised colour patch: SSIM (per RGB channel, averaged)
+makes both piece shape and piece colour part of the score, and two empty
+squares canonicalise to identical flat grey (score 1.0). The mock backend
+keeps its plain full-patch correlation (features are opaque to the
+recognizer), so SSIM/background canonicalisation is exercised by the
+real-image tests, including the highlighted-squares cases in
+`test_filter_real_images`.
 
 ### Import boundary (important)
 
-Keep heavy/IO deps (`numpy`, `mss`, `chess`, tkinter, `chesscheat.capture`)
-imported **lazily** inside the methods/functions that use them (see
-`recognition/numpy_image_backend.py`, `recognition/legal_move_filter.py`,
-`providers/`, `gui/dialogs.py`). The
-`board`, `interfaces`, `mocks` packages and the `run` loop must stay importable
-dependency-free so the suite runs anywhere. Subpackage `__init__.py` files must
-likewise avoid eager heavy imports (e.g. `capture/__init__.py` pulls in numpy,
-so depend on it only behind a lazy import).
+Keep heavy/IO deps (`numpy`, `mss`, `chess`/`chess.engine`, `pyautogui`,
+`pynput`, tkinter, `chesscheat.capture`) imported **lazily** inside the
+methods/functions that use them (see `recognition/numpy_image_backend.py`,
+`recognition/legal_move_filter.py`, `assist/` (engine/actuator/trigger),
+`providers/`, `gui/dialogs.py`). The `board`, `interfaces`, `mocks` and
+`assist` packages and the `run` loop must stay importable dependency-free so
+the suite runs anywhere (the `assist/__init__` re-exports only lazily-importing
+classes). Subpackage `__init__.py` files must likewise avoid eager heavy
+imports (e.g. `capture/__init__.py` pulls in numpy, so depend on it only
+behind a lazy import).

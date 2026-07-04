@@ -1,3 +1,5 @@
 mss
 numpy
 chess
+pyautogui
+pynput

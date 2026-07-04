@@ -44,11 +44,38 @@ shows up as an unknown square for a frame instead of corrupting the reading.
 legal chess moves is available in `chesscheat.recognition` for stricter
 game tracking, but the live reader does not use it.)
 
+### Move assist (optional)
+
+When it's your turn, press the assist key (**`A`** by default) and the program
+computes the best move with a chess engine and plays it for you by dragging
+the mouse on the board:
+
+1. the detected position is turned into a FEN (your side to move);
+2. a `MoveEngine` returns the best move — the bundled `StockfishMoveEngine`
+   drives a [Stockfish](https://stockfishchess.org/) binary via
+   [python-chess](https://pypi.org/project/chess/);
+3. a `MoveActuator` plays it — `PyAutoGuiActuator` moves the mouse to the
+   origin square, presses, drags to the destination and releases.
+
+The engine is behind the `MoveEngine` interface (`best_move(fen) -> uci`), so
+any engine can be dropped in. The assist is optional: if Stockfish, `pyautogui`
+or `pynput` aren't available the reader prints why and runs without it.
+
+> **Heads up.** This automates mouse input to play moves on your behalf. Using
+> engine assistance in online games violates the rules of every major chess
+> site and will get accounts banned. Use it for analysis, bots, and local
+> experimentation.
+
 ## Requirements
 
 - Python 3.8+
 - A real display (the tool captures the screen and cannot run headless)
-- Python modules: `mss`, `numpy`, `chess` (see `requirements.txt`)
+- Python modules: `mss`, `numpy`, `chess`, `pyautogui`, `pynput` (see
+  `requirements.txt`)
+- For the move assist: a **Stockfish** binary on `PATH` (or pointed to by the
+  `STOCKFISH_PATH` environment variable). Install it from your package manager
+  (`brew install stockfish`, `apt install stockfish`, …) or
+  [stockfishchess.org](https://stockfishchess.org/download/).
 
 ## Installation
 
@@ -118,7 +145,10 @@ reprinting the position whenever it changes. While it runs:
 - the terminal shows a timestamped **recent activity** log — each position
   change (as a FEN) and each frame with unknown squares;
 - the last terminal line shows the live **capture rate**, updated on every
-  frame, so a stall is immediately visible.
+  frame, so a stall is immediately visible;
+- pressing the **assist key** (`A`) on your turn plays the engine's best move
+  for you (see [Move assist](#move-assist-optional)); each assist action is
+  logged in the activity list.
 
 For example:
 

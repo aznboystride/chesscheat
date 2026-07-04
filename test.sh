@@ -25,7 +25,8 @@ case "${1:-}" in
     --fast)
         # Only run the dependency-free tests (board logic + mock pipeline).
         exec "$PYTHON" -m unittest tests.test_board tests.test_recognition \
-            tests.test_setup_confirmation tests.test_console_output -v
+            tests.test_setup_confirmation tests.test_console_output \
+            tests.test_assist -v
         ;;
     --real)
         # Only run tests that need third-party deps (numpy/Pillow/python-chess).

@@ -1,0 +1,71 @@
+"""The ``PyAutoGuiActuator`` move actuator and its pixel-geometry helper."""
+
+from chesscheat import board
+from chesscheat.interfaces import MoveActuator
+
+
+def move_pixels(uci, box, playing_white):
+    """Map a UCI move to its origin and destination pixel centres.
+
+    Pure geometry: locates the centre of the move's from- and to-squares in
+    absolute screen coordinates, given the board's bounding box and
+    orientation.
+
+    Args:
+        uci: A move in UCI notation; only the first four characters (the
+            origin and destination squares) are used.
+        box: The board's ``(x1, y1, x2, y2)`` bounding box in absolute
+            screen coordinates.
+        playing_white: True if the board is oriented from white's
+            perspective.
+
+    Returns:
+        A ``((from_x, from_y), (to_x, to_y))`` pair of float pixel centres.
+    """
+    x1, y1, x2, y2 = box
+    cell_w, cell_h = (x2 - x1) / 8, (y2 - y1) / 8
+
+    def centre(name):
+        row, col = board.cell_of(*board.parse_square(name), playing_white)
+        return x1 + (col + 0.5) * cell_w, y1 + (row + 0.5) * cell_h
+
+    return centre(uci[0:2]), centre(uci[2:4])
+
+
+class PyAutoGuiActuator(MoveActuator):
+    """Plays a move by dragging the mouse with ``pyautogui``.
+
+    Moves to the origin square's centre, presses the left button, drags to
+    the destination square's centre and releases -- the click-drag gesture
+    most web boards expect. A promotion suffix in the move is ignored; the
+    site's own promotion prompt (if any) is not handled.
+
+    Attributes:
+        duration: Seconds the cursor takes to travel between squares.
+    """
+
+    def __init__(self, duration=0.25):
+        """Initialise the actuator.
+
+        Args:
+            duration: Seconds the drag from origin to destination takes;
+                a short travel time makes the motion look natural and gives
+                web boards time to register the drag.
+        """
+        self.duration = duration
+
+    def apply(self, uci, box, playing_white):
+        """Drag the mouse to play ``uci`` on the board at ``box``.
+
+        Args:
+            uci: The move in UCI notation.
+            box: The board's ``(x1, y1, x2, y2)`` screen bounding box.
+            playing_white: True if the board is from white's perspective.
+        """
+        import pyautogui
+
+        (from_x, from_y), (to_x, to_y) = move_pixels(uci, box, playing_white)
+        pyautogui.moveTo(from_x, from_y)
+        pyautogui.mouseDown(button="left")
+        pyautogui.moveTo(to_x, to_y, duration=self.duration)
+        pyautogui.mouseUp(button="left")

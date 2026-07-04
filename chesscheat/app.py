@@ -16,13 +16,16 @@ from chesscheat import board
 
 def run(setup, make_frame_source, recognizer, *, on_board,
         on_frame=lambda image: None, before_calibrate=lambda: None,
-        interval=0.0, sleeper=time.sleep):
+        interval=0.0, sleeper=time.sleep, trigger=None,
+        on_trigger=lambda board_map, playing_white, box: None):
     """Drive the read loop using injected interface implementations.
 
     Asks ``setup`` for the side and box, shows the user what the box captures
     (reselecting until it is confirmed), builds a frame source, calibrates the
     recognizer from the first frame (the starting position) and then reports
-    every subsequent frame until the source is exhausted or interrupted.
+    every subsequent frame until the source is exhausted or interrupted. When
+    a ``trigger`` fires (e.g. the user's keybind), ``on_trigger`` is invoked
+    with the latest reading so an assistant can act on the current position.
 
     Args:
         setup: A ``SetupProvider`` for the side, bounding box, and capture
@@ -38,6 +41,11 @@ def run(setup, make_frame_source, recognizer, *, on_board,
             to wait for the user to set up the starting position.
         interval: Seconds to sleep between frames; 0 disables sleeping.
         sleeper: Sleep function, injectable for testing.
+        trigger: Optional ``MoveTrigger`` polled once per frame; started
+            before the loop and stopped when it ends. None disables the
+            assist path entirely.
+        on_trigger: Callback invoked as ``(board_map, playing_white, box)``
+            with the latest reading when ``trigger`` fires.
 
     Returns:
         The ``playing_white`` boolean chosen via ``setup``.
@@ -52,6 +60,8 @@ def run(setup, make_frame_source, recognizer, *, on_board,
     before_calibrate()
     recognizer.calibrate(frames.grab(), playing_white)
 
+    if trigger is not None:
+        trigger.start()
     try:
         while True:
             try:
@@ -61,10 +71,15 @@ def run(setup, make_frame_source, recognizer, *, on_board,
             reading = recognizer.read(image)
             on_frame(image)
             on_board(reading, playing_white)
+            if trigger is not None and trigger.poll():
+                on_trigger(reading, playing_white, box)
             if interval:
                 sleeper(interval)
     except KeyboardInterrupt:
         pass
+    finally:
+        if trigger is not None:
+            trigger.stop()
     return playing_white
 
 
@@ -157,6 +172,52 @@ def _calibration_progress(done, total):
 # fixture sets, so 0.6 separates them with margin on both sides.
 SSIM_THRESHOLD = 0.6
 
+# Key the user presses when it is their turn and they want the assistant to
+# compute and play the best move.
+ASSIST_KEY = "a"
+
+
+def _build_assist(on_event):
+    """Try to wire the move-assist (engine + mouse + keybind).
+
+    The assist needs a Stockfish binary plus ``pyautogui`` and ``pynput``.
+    If any is missing this returns no-op wiring and prints why, so the reader
+    still runs without the assist.
+
+    Args:
+        on_event: The console activity callback, used to log assist actions.
+
+    Returns:
+        A ``(trigger, on_trigger)`` pair for ``run``; ``trigger`` is None
+        when the assist is unavailable.
+    """
+    from chesscheat.assist import (StockfishMoveEngine, PyAutoGuiActuator,
+                                   KeyTrigger, assist_move)
+    try:
+        import pyautogui  # noqa: F401  -- probe availability early
+        import pynput  # noqa: F401
+        engine = StockfishMoveEngine()
+        actuator = PyAutoGuiActuator()
+        trigger = KeyTrigger(ASSIST_KEY)
+    except (ImportError, FileNotFoundError) as exc:
+        print(f"Move assist disabled ({exc}).\n")
+        return None, lambda board_map, playing_white, box: None
+
+    print(f"Move assist ready: press '{ASSIST_KEY.upper()}' on your turn to "
+          "play the engine's best move.\n")
+
+    def on_trigger(board_map, playing_white, box):
+        on_event("assist", "computing best move...")
+        try:
+            uci = assist_move(board_map, playing_white, box, engine, actuator)
+        except Exception as exc:  # keep the read loop alive on engine errors
+            on_event("assist", f"failed: {exc}")
+            return
+        on_event("assist", f"played {uci}" if uci
+                 else "no move (game over or unreadable position)")
+
+    return trigger, on_trigger
+
 
 def main():
     """Wire the real implementations and run the live reader."""
@@ -207,11 +268,13 @@ def main():
         seen["unknown"] = unknown
         console_frame(image)
 
+    trigger, on_trigger = _build_assist(on_event)
+
     run(setup, ScreenFrameSource, recognizer,
         on_board=on_board, on_frame=on_frame,
         before_calibrate=lambda: print(
             "\nCapture confirmed -- calibrating from the starting position..."),
-        interval=0.3)
+        interval=0.3, trigger=trigger, on_trigger=on_trigger)
 
 
 if __name__ == "__main__":
