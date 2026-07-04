@@ -28,15 +28,20 @@ python3 -m unittest tests.test_board.FenTests.test_after_e4
 ```
 
 There is no build step or linter config. Runtime dependencies (`mss`,
-`numpy`, `chess`, `pyautogui`, `pynput`; plus a Stockfish binary for the move
-assist) live in `requirements.txt`; `setup.sh` builds a `venv/` and
-installs them (honors a `PYTHON` env var override). Installing manually works
-too: `pip install -r requirements.txt`. The entire test suite still *runs*
-with **no** third-party deps installed: the dep-free tests exercise the mock
-implementations, and the dep-requiring tests are `skipUnless`-guarded. Wrapper
-scripts: `./run.sh` (live reader), `./test.sh` (`--fast` dep-free only,
-`--real` dep-requiring only, or a dotted test path), `./generate-fixtures.sh`.
-See `README.md` for end-user install/run instructions.
+`numpy`, `chess`, `pyautogui`, `pynput`) live in `requirements.txt`; `setup.sh`
+builds a `venv/`, installs them (honors a `PYTHON` env var override), and then
+downloads a **Stockfish** binary matching the host into `venv/bin` via
+`scripts/install_stockfish.py` (Apple Silicon → `macos-m1-apple-silicon`
+build; skip with `SKIP_STOCKFISH=1`, pin with `STOCKFISH_VERSION`). That step
+is non-fatal — the reader still runs without the move assist. Installing
+manually works too: `pip install -r requirements.txt`. The entire test suite
+still *runs* with **no** third-party deps installed: the dep-free tests
+exercise the mock implementations, and the dep-requiring tests are
+`skipUnless`-guarded. Wrapper scripts: `./run.sh` (live reader; also puts
+`venv/bin` on PATH so the installed `stockfish` is found without activation),
+`./test.sh` (`--fast` dep-free only, `--real` dep-requiring only, or a dotted
+test path), `./generate-fixtures.sh`. See `README.md` for end-user install/run
+instructions.
 
 ## Coding preferences
 
@@ -198,7 +203,14 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
 - `StockfishMoveEngine` — locates a binary (explicit path / `STOCKFISH_PATH` /
   `shutil.which("stockfish")`) at construction; `best_move` opens a UCI engine
   per call via **python-chess** (`chess.engine`, lazy), returns None for an
-  invalid/finished position.
+  invalid/finished position. The binary is normally supplied by
+  `scripts/install_stockfish.py` (run from `setup.sh`), which picks the
+  release asset for the host — `asset_candidates`/`select_asset` map
+  system/machine to the right `.tar` (Apple Silicon M1–M4 → the single
+  `macos-m1-apple-silicon` build) — downloads it from the official Stockfish
+  GitHub releases, installs it as `venv/bin/stockfish` and clears the macOS
+  quarantine flag. Stdlib-only; the selection logic is pure and tested in
+  `test_install_stockfish.py` (no network).
 - `PyAutoGuiActuator` — `move_pixels(uci, box, playing_white)` (pure: maps the
   from/to squares to screen-pixel centres via `board.parse_square`/`cell_of`)
   then `pyautogui` (lazy) moveTo → mouseDown → moveTo(duration) → mouseUp.
@@ -284,6 +296,11 @@ time are recognised exactly.
   loops back to reselection, the preview never consumes the calibration
   frame, prompt y/n and fallback forwarding, and `_image_to_ppm` encoding
   (grayscale lists dep-free; BGRA/RGB/gray arrays `skipUnless(numpy)`).
+- `test_install_stockfish.py` — the Stockfish installer's pure
+  platform/asset selection (`asset_candidates`/`select_asset`): M1–M4 Mac →
+  `macos-m1-apple-silicon.tar`, Intel-Mac/Linux ordering and fallbacks,
+  `.tar`-only, unsupported platforms → None. Loads `scripts/install_stockfish.py`
+  by path; dep-free, no network.
 - `test_assist.py` — the move assist, dep-free via mocks: `cell_of`/
   `parse_square`/`castling_field`/`to_full_fen` helpers, `move_pixels`
   geometry (white/black orientation, promotion suffix ignored), `assist_move`

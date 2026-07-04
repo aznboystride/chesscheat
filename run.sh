@@ -16,6 +16,9 @@ PYTHON="${PYTHON:-python3}"
 
 if [ -f "$SCRIPT_DIR/venv/bin/python3" ]; then
     PYTHON="$SCRIPT_DIR/venv/bin/python3"
+    # Put the venv's bin on PATH so the Stockfish binary setup.sh installed
+    # there is found by shutil.which("stockfish") even without activation.
+    export PATH="$SCRIPT_DIR/venv/bin:$PATH"
 fi
 
 exec "$PYTHON" -m chesscheat "$@"

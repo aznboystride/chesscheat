@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 #
-# Create a Python virtual environment and install the project dependencies.
+# Create a Python virtual environment, install the project dependencies, and
+# download a Stockfish engine matching this machine (e.g. the Apple Silicon
+# build on an M1-M4 Mac) so the move assist works out of the box.
 #
 # Usage:
-#   ./setup.sh            # creates ./venv and installs requirements.txt
+#   ./setup.sh            # creates ./venv, installs deps, installs Stockfish
+#
+# Environment overrides:
+#   PYTHON=...            # interpreter used to build the venv (default python3)
+#   STOCKFISH_VERSION=... # pin a release tag, e.g. sf_17.1 (default: latest)
+#   SKIP_STOCKFISH=1      # skip the Stockfish download
 #
 # Afterwards, activate it with:
 #   source venv/bin/activate
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="venv"
 PYTHON="${PYTHON:-python3}"
 
@@ -21,6 +29,21 @@ echo "Upgrading pip ..."
 
 echo "Installing dependencies from requirements.txt ..."
 "$VENV_DIR/bin/pip" install -r requirements.txt
+
+if [ "${SKIP_STOCKFISH:-0}" = "1" ]; then
+    echo "Skipping Stockfish download (SKIP_STOCKFISH=1)."
+else
+    echo "Installing the Stockfish engine for this machine ..."
+    # Install into the venv's bin so it is on PATH when the venv is active and
+    # discoverable via shutil.which("stockfish"). Non-fatal: the reader still
+    # runs without the move assist if this step fails (e.g. no network).
+    if ! "$VENV_DIR/bin/python" "$SCRIPT_DIR/scripts/install_stockfish.py" \
+            --dest "$VENV_DIR/bin"; then
+        echo "  Warning: Stockfish was not installed; the move assist will be"
+        echo "  disabled until a 'stockfish' binary is on PATH (or STOCKFISH_PATH"
+        echo "  is set). The board reader itself is unaffected."
+    fi
+fi
 
 echo
 echo "Done. Activate the environment with:"
