@@ -59,7 +59,15 @@ the mouse on the board:
 
 The engine is behind the `MoveEngine` interface (`best_move(fen) -> uci`), so
 any engine can be dropped in. The assist is optional: if Stockfish, `pyautogui`
-or `pynput` aren't available the reader prints why and runs without it.
+or `pynput` aren't available the reader prints why and runs without it. Set
+`CHESSCHEAT_NO_ASSIST=1` to turn it off entirely.
+
+> **macOS:** the global keybind needs **Input Monitoring** permission (and
+> **Accessibility** to move the mouse). Grant them to your terminal under
+> *System Settings → Privacy & Security*, then restart it. Without Input
+> Monitoring, macOS would kill the process with a "trace trap" when the
+> listener starts — the program now detects this up front and simply disables
+> the assist with a message instead of crashing.
 
 > **Heads up.** This automates mouse input to play moves on your behalf. Using
 > engine assistance in online games violates the rules of every major chess
@@ -206,6 +214,15 @@ using a translucent borderless window instead of Tk fullscreen (which moves
 into its own black Space). If the overlay ever misbehaves, press `Escape` or
 right-click to cancel it, and the text-prompt fallback can be used by
 entering the corner coordinates by hand.
+
+**It crashed with "zsh: trace trap" right after I confirmed the board
+(macOS).** That was the global assist keybind: macOS kills the process when a
+keyboard listener starts without **Input Monitoring** permission. Grant your
+terminal Input Monitoring (and Accessibility, to move the mouse) under
+*System Settings → Privacy & Security*, then restart it. The program now
+checks this permission before starting the listener and, if it's missing,
+prints a message and runs without the assist instead of crashing. You can
+also disable the assist entirely with `CHESSCHEAT_NO_ASSIST=1`.
 
 ## Tests
 

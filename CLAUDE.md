@@ -217,11 +217,21 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   Promotion suffix ignored (site prompt not handled).
 - `KeyTrigger(key="a")` — a global `pynput` (lazy) keyboard listener in a
   thread; a matching press sets a `threading.Event` that `poll` edge-consumes.
-- `main` builds the assist via `_build_assist`, which probes for
-  Stockfish + `pyautogui` + `pynput` and, on any `ImportError`/
-  `FileNotFoundError`, prints why and returns a no-op trigger so the reader
-  still runs. `on_trigger` calls `assist_move` and logs `("assist", …)`
-  events; engine exceptions are caught so the loop survives.
+  On macOS a global listener needs **Input Monitoring** permission; without it
+  the native event-tap creation aborts the whole process with a *trace trap*
+  that Python can't catch. `has_input_monitoring()` preflights via
+  `Quartz.CGPreflightListenEventAccess` (True off-macOS / when the API is
+  absent) and `start` raises `PermissionError` rather than creating the tap
+  unpermitted.
+- `main` builds the assist via `_build_assist`, which honours a
+  `CHESSCHEAT_NO_ASSIST` opt-out, probes for Stockfish + `pyautogui` +
+  `pynput` (on any `ImportError`/`FileNotFoundError` prints why and returns a
+  no-op trigger), and gates on `trigger.permission_ok()` so a missing macOS
+  permission disables the assist with a message up front instead of crashing.
+  `run` additionally wraps `trigger.start()` so any start failure disables the
+  assist rather than taking down the reader. `on_trigger` calls `assist_move`
+  and logs `("assist", …)` events; engine exceptions are caught so the loop
+  survives.
 
 ### Mocks (`chesscheat/mocks/`) — dependency-free, test the whole pipeline
 

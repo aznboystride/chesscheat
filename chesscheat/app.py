@@ -8,6 +8,7 @@ first frame (the starting position) and then reports every subsequent frame.
 """
 
 import collections
+import os
 import sys
 import time
 
@@ -61,7 +62,13 @@ def run(setup, make_frame_source, recognizer, *, on_board,
     recognizer.calibrate(frames.grab(), playing_white)
 
     if trigger is not None:
-        trigger.start()
+        try:
+            trigger.start()
+        except Exception as exc:
+            # A trigger that can't start (e.g. missing OS permission) disables
+            # the assist -- it must never take down the reader.
+            print(f"Move assist disabled: {exc}")
+            trigger = None
     try:
         while True:
             try:
@@ -191,6 +198,12 @@ def _build_assist(on_event):
         A ``(trigger, on_trigger)`` pair for ``run``; ``trigger`` is None
         when the assist is unavailable.
     """
+    noop = lambda board_map, playing_white, box: None
+
+    if os.environ.get("CHESSCHEAT_NO_ASSIST"):
+        print("Move assist disabled (CHESSCHEAT_NO_ASSIST set).\n")
+        return None, noop
+
     from chesscheat.assist import (StockfishMoveEngine, PyAutoGuiActuator,
                                    KeyTrigger, assist_move)
     try:
@@ -201,7 +214,16 @@ def _build_assist(on_event):
         trigger = KeyTrigger(ASSIST_KEY)
     except (ImportError, FileNotFoundError) as exc:
         print(f"Move assist disabled ({exc}).\n")
-        return None, lambda board_map, playing_white, box: None
+        return None, noop
+
+    # On macOS the global keybind needs Input Monitoring permission; without
+    # it, starting the listener aborts the process (a "trace trap"). Check up
+    # front and disable the assist gracefully instead of crashing later.
+    if not trigger.permission_ok():
+        print(f"Move assist disabled: grant your terminal Input Monitoring "
+              "(and Accessibility) in System Settings -> Privacy & Security, "
+              f"then restart to use the '{ASSIST_KEY.upper()}' keybind.\n")
+        return None, noop
 
     print(f"Move assist ready: press '{ASSIST_KEY.upper()}' on your turn to "
           "play the engine's best move.\n")
