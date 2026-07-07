@@ -72,18 +72,30 @@ or `pynput` aren't available the reader prints why and runs without it.
 - A real display (the tool captures the screen and cannot run headless)
 - Python modules: `mss`, `numpy`, `chess`, `pyautogui`, `pynput` (see
   `requirements.txt`)
-- For the move assist: a **Stockfish** binary on `PATH` (or pointed to by the
-  `STOCKFISH_PATH` environment variable). Install it from your package manager
-  (`brew install stockfish`, `apt install stockfish`, …) or
-  [stockfishchess.org](https://stockfishchess.org/download/).
+- For the move assist: a **Stockfish** binary. `./setup.sh` downloads one
+  matching your machine automatically (see below), so you normally don't need
+  to install it yourself. To supply your own, put a `stockfish` binary on
+  `PATH` or point `STOCKFISH_PATH` at it.
 
 ## Installation
 
-Use the setup script to create a virtual environment and install everything:
+Use the setup script to create a virtual environment, install the Python
+dependencies, and download a Stockfish engine matching your machine — on an
+Apple Silicon Mac (M1–M4) it fetches the `macos-m1-apple-silicon` build and
+installs it into `venv/bin`, ready for the move assist:
 
 ```bash
 ./setup.sh
 source venv/bin/activate
+```
+
+The Stockfish download is best-effort: if it fails (no network, unsupported
+platform) setup still succeeds and only the move assist is disabled. Useful
+knobs:
+
+```bash
+SKIP_STOCKFISH=1 ./setup.sh          # don't download Stockfish
+STOCKFISH_VERSION=sf_17.1 ./setup.sh # pin a specific release tag
 ```
 
 Or do it manually:
@@ -92,7 +104,11 @@ Or do it manually:
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+python3 scripts/install_stockfish.py --dest venv/bin   # optional: the engine
 ```
+
+Launching with `./run.sh` puts `venv/bin` on `PATH`, so the engine installed
+there is found even without activating the venv.
 
 ## Running
 
