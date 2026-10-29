@@ -251,6 +251,19 @@ Press `Ctrl+C` to stop.
 
 ## Troubleshooting
 
+**The GUI windows can't open: "No module named '_tkinter'" (macOS).**
+Homebrew Python ships Tk as a separate *versioned* formula, and the version
+must match the Python your venv was built on — a bare `brew install
+python-tk` installs Tk for the newest Python, which may not be yours.
+`setup.sh` warns and names the right one; mirror mode exits with the same
+hint. Check the venv's version and install that:
+
+```bash
+venv/bin/python --version          # e.g. Python 3.14.x
+brew install python-tk@3.14
+venv/bin/python -c "import tkinter; print(tkinter.TkVersion)"
+```
+
 **The capture shows only my desktop wallpaper (macOS).** macOS hides all
 window content from screen capture until the capturing app has **Screen
 Recording** permission. Grant it to whatever runs the program (Terminal,
