@@ -1026,6 +1026,24 @@ class BackgroundThinkingTests(unittest.TestCase):
         self.worker.finish_all()         # the current one lands
         self.assertEqual(self.view.evaluations[-1][1], "+0.50")
 
+    def test_a_bare_error_is_named_in_the_status(self):
+        class Cancelled(MockMoveEngine):
+            def best_move(self, fen):
+                import concurrent.futures
+                raise concurrent.futures.CancelledError()
+
+        worker = _Worker()
+        view = MockMirrorView()
+        events = []
+        game = MirrorGame(False, BOX, Cancelled(), MockMoveActuator(), view,
+                          worker=worker,
+                          on_event=lambda k, d: events.append((k, d)))
+        game.start()
+        game.submit_move("e2", "e4")
+        worker.finish_all()
+        self.assertIn(("engine", "failed: CancelledError"), events)
+        self.assertIn("Engine error: CancelledError", view.updates[-1][2])
+
     def test_engine_error_in_the_worker_becomes_a_status(self):
         class Failing(MockMoveEngine):
             def best_move(self, fen):

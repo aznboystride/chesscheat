@@ -168,9 +168,10 @@ free `gm2600.bin` or any Polyglot book you build yourself).
 The engine searches on a background thread, so the window stays live
 while it thinks: you can still pause auto-play, undo or start a new game
 mid-search, and a result for a position that has since changed is thrown
-away. One Stockfish process stays open for the whole session (rather than
-being started for every search and every evaluation), which removes the
-engine start-up cost from each move.
+away. Two Stockfish processes stay open for the whole session, one for
+searching and one for the evaluation bar (rather than being started for
+every call), which removes the engine start-up cost from each move and lets
+the bar update while a search is running.
 - **Undo** — takes back the last opponent move *and* whatever followed it
   (the engine's reply, or your own manual move), putting the board back on
   the opponent's turn so you can enter the correct move. A reply still

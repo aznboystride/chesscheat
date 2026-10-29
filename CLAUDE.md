@@ -228,12 +228,23 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
 `actuator.apply(uci, box, playing_white)`, returning the UCI played.
 - `StockfishMoveEngine` — locates a binary (explicit path / `STOCKFISH_PATH` /
   `shutil.which("stockfish")`; `path` may also be a command list) at
-  construction; **one UCI process is kept alive** across calls via
-  **python-chess** (`chess.engine`, lazy): `_engine()` opens it on first
-  use and registers `close` with `atexit`; `_run(action)` closes and
-  re-raises on `chess.engine.EngineError` so a dead process is reopened by
-  the next call; `running` tells; `SimpleEngine` serialises commands from
-  several threads (a worker-thread search and an evaluation just queue).
+  construction; **one UCI process per role is kept alive** across calls
+  via **python-chess** (`chess.engine`, lazy) — `"search"` (`best_move`,
+  styled or not) and `"analysis"` (`evaluate`) — each with its own
+  `threading.Lock`: `_engine(role)` opens it on first use (under the
+  lock) and registers `close` with `atexit`; `_run(role, action)` holds
+  the lock, closes that role and re-raises on `chess.engine.EngineError`
+  so a dead process is reopened by the next call; `running` tells.
+  **Why two processes**: `SimpleEngine` is thread-safe but does *not*
+  queue — `Protocol.communicate` **cancels the command in flight** when a
+  new one arrives, so an evaluation sent to the search's process would
+  abort the search with a bare `CancelledError` (this was the empty
+  "Engine error:" the user saw: the bar's analysis, dispatched right after
+  the reply search, killed it). The locks also serialise same-role calls
+  (a stale search and a new one) and the first open (two worker threads
+  used to race to `popen`). Pinned by `test_a_search_and_an_evaluation_
+  can_run_at_the_same_time` / `test_two_searches_are_serialised_not_
+  cancelled`.
   `best_move` returns None for an invalid/finished position; `think_time`
   (default **0.3 s**, settable via `set_think_time`, floor 0.01) is the
   `Limit(time=…)`. Strength is sent as **per-call `options`** on every
@@ -397,8 +408,8 @@ on_event)` is the controller, programmed only against `MoveEngine` /
 - **Evaluation bar**: `_refresh_evaluation()` runs after every position
   change — `start`, each opponent move, each program/manual move, `undo`,
   `new_game` — **off the critical path**: the engine is asked through the
-  `worker` (so a persistent engine busy with the search just queues the
-  analysis, and the GUI never waits), and it is dispatched only *after*
+  `worker` (so the GUI never waits; the local engine analyses on its own
+  process, in parallel with the search), and it is dispatched only *after*
   `_reply` has started the search / after the actuator has dragged (with a
   synchronous worker an instantly-played reply skips the pre-reply score,
   since the post-reply one follows at once); a score for a position that
@@ -689,7 +700,10 @@ time are recognised exactly.
   `fixtures/fake_uci_engine.py` (`skipUnless(chess)`): one process serves
   searches and evaluations and is reused, strength is per search while
   evaluation is always full, black-to-move scores are white-relative, a
-  crashed process is dropped and reopened. A
+  crashed process is dropped and reopened, a search and an evaluation run
+  at the same time (separate processes: the search is not cancelled), and
+  concurrent searches are serialised. `MirrorGame` names a bare exception
+  (e.g. `CancelledError`) by type in the status (`_describe`). A
   `skipUnless(shutil.which("stockfish"))` case runs the real
   `StockfishMoveEngine` (legal opening move; None at game over; `evaluate`
   signed from white's perspective).
