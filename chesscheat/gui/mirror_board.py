@@ -14,6 +14,9 @@ GLYPHS = {"K": "♔", "Q": "♕", "R": "♖", "B": "♗",
 STRENGTHS = (("Full strength", None), ("2800", 2800), ("2500", 2500),
              ("2200", 2200), ("1900", 1900), ("1600", 1600), ("1400", 1400))
 
+EVAL_WIDTH = 24           # width of the evaluation bar beside the board
+EVAL_WHITE, EVAL_BLACK = "#f4f4f4", "#3a3a3a"
+
 
 class MirrorBoardWindow(MirrorView):
     """A tkinter board the user enters the opponent's moves on.
@@ -25,13 +28,19 @@ class MirrorBoardWindow(MirrorView):
     controller validates it). The last move played is highlighted and a
     status line says whose turn it is.
 
+    An **evaluation bar** runs down the left of the board (white's share
+    grows from white's side; the score or result is printed on it), fed by
+    ``update_evaluation``.
+
     A control bar under the board exposes the runtime settings -- an
     **Auto-play** toggle, a **Watch app** toggle (read the opponent's moves
     off the real app's last-move highlight instead of entering them), a
     **reply delay range** (min/max seconds; equal for a fixed delay, apart
-    for random jitter), the engine **strength**, and an **Undo** button
-    that takes back the last opponent move and the reply to it -- each
-    reported through its own callback.
+    for random jitter), the engine **strength**, an **Undo** button that
+    takes back the last opponent move and the reply to it, and a **New
+    game** button that asks which colour the user plays now (the real board
+    is reused) -- each reported through its own callback.
+    ``set_orientation`` flips the board for a new game as the other colour.
     ``square_position`` tells the controller where a square is on screen so
     the pointer can be returned here after a move in the real app. ``schedule`` defers work on the Tk event loop so a delayed
     reply never freezes the window.
@@ -45,8 +54,9 @@ class MirrorBoardWindow(MirrorView):
 
     def __init__(self, on_move, bottom_white, avoid_box=None, cell=64,
                  title="chesscheat mirror board", on_auto=None, on_delay=None,
-                 on_strength=None, on_undo=None, on_watch=None, auto=True,
-                 delay=0.0, elo=None, watch=True):
+                 on_strength=None, on_undo=None, on_watch=None,
+                 on_new_game=None, auto=True, delay=0.0, elo=None,
+                 watch=True):
         """Create the window.
 
         Args:
@@ -69,6 +79,8 @@ class MirrorBoardWindow(MirrorView):
                 back the last opponent move and the reply to it).
             on_watch: Callback ``(enabled)`` when the Watch-app toggle
                 changes.
+            on_new_game: Callback ``(playing_white)`` after the user pressed
+                New game and chose a colour (not called on cancel).
             auto: Initial state of the auto-play toggle.
             delay: Initial reply delay shown: seconds, or a ``(min, max)``
                 pair.
@@ -85,6 +97,8 @@ class MirrorBoardWindow(MirrorView):
         self._board_map = {}
         self._last_move = None
         self._selected = None   # algebraic name of the first clicked square
+        self._evaluation = (0.5, "")
+        self._on_new_game = on_new_game
 
         self._root = tk.Tk()
         self._root.title(title)
@@ -93,17 +107,23 @@ class MirrorBoardWindow(MirrorView):
         if avoid_box is not None:
             x, y = gui_placement(avoid_box, self._root.winfo_screenwidth(),
                                  self._root.winfo_screenheight(),
-                                 side, side + 96)
+                                 side + EVAL_WIDTH, side + 96)
             self._root.geometry(f"+{int(x)}+{int(y)}")
-        self._canvas = tk.Canvas(self._root, width=side, height=side,
+        boards = tk.Frame(self._root)
+        boards.pack()
+        self._eval = tk.Canvas(boards, width=EVAL_WIDTH, height=side,
+                               highlightthickness=0, bg=EVAL_BLACK)
+        self._eval.pack(side="left")
+        self._canvas = tk.Canvas(boards, width=side, height=side,
                                  highlightthickness=0)
-        self._canvas.pack()
+        self._canvas.pack(side="left")
         self._canvas.bind("<Button-1>", self._on_click)
         self._status = tk.Label(self._root, text="", anchor="w",
                                 font=("Helvetica", 12), padx=8, pady=6)
         self._status.pack(fill="x")
         self._build_controls(tk, on_auto, on_delay, on_strength, on_undo,
                              on_watch, auto, delay, elo, watch)
+        self._draw_evaluation()
 
     def _build_controls(self, tk, on_auto, on_delay, on_strength, on_undo,
                         on_watch, auto, delay, elo, watch):
@@ -177,6 +197,73 @@ class MirrorBoardWindow(MirrorView):
 
         tk.Button(bar, text="Undo", command=lambda: on_undo and on_undo()
                   ).pack(side="right")
+        tk.Button(bar, text="New game", command=self._new_game
+                  ).pack(side="right")
+
+    def ask_side(self):
+        """Ask which colour the user plays, for a new game.
+
+        Returns:
+            True for white, False for black, None if the dialog was
+            cancelled.
+        """
+        from tkinter import messagebox
+
+        return messagebox.askyesnocancel(
+            "New game",
+            "Start a new game on the same board.\n\nAre you playing white?"
+            "\n(Yes = white, No = black)", parent=self._root)
+
+    def _new_game(self):
+        """Handle the New game button: ask the side, then tell the controller."""
+        side = self.ask_side()
+        if side is not None and self._on_new_game:
+            self._on_new_game(bool(side))
+
+    def set_orientation(self, bottom_white):
+        """Flip the board so the given side is at the bottom.
+
+        Args:
+            bottom_white: True to put white at the bottom.
+        """
+        self.bottom_white = bottom_white
+        self._selected = None
+        self._draw()
+        self._draw_evaluation()
+
+    def update_evaluation(self, white_share, label):
+        """Show an evaluation on the bar beside the board.
+
+        Args:
+            white_share: White's fraction of the bar, in ``[0, 1]``.
+            label: Text printed on the bar (score or result).
+        """
+        self._evaluation = (max(0.0, min(1.0, float(white_share))), label)
+        self._draw_evaluation()
+
+    def _draw_evaluation(self):
+        """Render the evaluation bar: white's share grows from white's side."""
+        share, label = self._evaluation
+        side = 8 * self._cell
+        canvas = self._eval
+        canvas.delete("all")
+        white_px = share * side
+        if self.bottom_white:
+            canvas.create_rectangle(0, side - white_px, EVAL_WIDTH, side,
+                                    fill=EVAL_WHITE, outline=EVAL_WHITE)
+        else:
+            canvas.create_rectangle(0, 0, EVAL_WIDTH, white_px,
+                                    fill=EVAL_WHITE, outline=EVAL_WHITE)
+        if label:
+            # Print the label at the end of the bar belonging to whoever is
+            # ahead, in the contrasting colour.
+            white_ahead = share >= 0.5
+            at_bottom = white_ahead == self.bottom_white
+            canvas.create_text(
+                EVAL_WIDTH / 2, side - 4 if at_bottom else 4,
+                text=label, angle=90, anchor="w" if at_bottom else "e",
+                font=("Helvetica", 9, "bold"),
+                fill=EVAL_BLACK if white_ahead else EVAL_WHITE)
 
     def schedule(self, seconds, fn):
         """Run ``fn`` after ``seconds`` on the Tk event loop (non-blocking).

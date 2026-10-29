@@ -12,6 +12,9 @@ class MockMirrorView(MirrorView):
         ran: True once ``run`` has been called.
         positions: A ``{square_name: (x, y)}`` map ``square_position``
             answers from; empty by default (no positions known).
+        evaluations: ``(white_share, label)`` pairs from
+            ``update_evaluation``, in order.
+        orientations: ``bottom_white`` values from ``set_orientation``.
     """
 
     def __init__(self, positions=None):
@@ -24,6 +27,16 @@ class MockMirrorView(MirrorView):
         self.updates = []
         self.ran = False
         self.positions = dict(positions or {})
+        self.evaluations = []
+        self.orientations = []
+
+    def update_evaluation(self, white_share, label):
+        """Record an evaluation display request."""
+        self.evaluations.append((white_share, label))
+
+    def set_orientation(self, bottom_white):
+        """Record an orientation change."""
+        self.orientations.append(bottom_white)
 
     def square_position(self, name):
         """Return the configured position for ``name``, or None.

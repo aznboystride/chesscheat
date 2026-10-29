@@ -130,6 +130,23 @@ class ActuatorSequenceTests(unittest.TestCase):
             ("mouseUp", "left"),                # drop the piece
         ])
 
+    def test_per_call_pause_is_disabled_and_defaults_are_quick(self):
+        from unittest import mock
+        from chesscheat.assist import PyAutoGuiActuator
+
+        fake = self._FakePyAutoGui()
+        fake.PAUSE = 0.1                     # pyautogui's default
+        actuator = PyAutoGuiActuator()
+        self.assertEqual((actuator.duration, actuator.focus_pause),
+                         (0.15, 0.05))
+        self.assertGreater(actuator.duration, 0.1)   # pyautogui animates
+        with mock.patch.dict("sys.modules", {"pyautogui": fake}), \
+                mock.patch("time.sleep"):
+            actuator.apply("e2e4", (0, 0, 800, 800), True)
+            actuator.point_to(1, 2)
+        self.assertEqual(fake.PAUSE, 0)
+        self.assertEqual(fake.calls[3][3], 0.15)  # the drag's duration
+
     def test_focus_pause_is_waited(self):
         from unittest import mock
         from chesscheat.assist import PyAutoGuiActuator
@@ -312,6 +329,21 @@ class StockfishEngineTests(unittest.TestCase):
         fen = ("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR "
                "w KQkq - 1 3")
         self.assertIsNone(engine.best_move(fen))
+        self.assertIsNone(engine.evaluate(fen))
+
+    def test_evaluate_scores_from_whites_perspective(self):
+        from chesscheat.assist import StockfishMoveEngine
+
+        engine = StockfishMoveEngine(eval_time=0.05)
+        # White is a queen up: a clearly positive score (or a mate).
+        fen = "4k3/8/8/8/8/8/8/3QK3 w - - 0 1"
+        score = engine.evaluate(fen)
+        self.assertTrue(score.get("mate", 0) > 0 or score.get("cp", 0) > 300,
+                        score)
+        # Same material edge for black, black to move: negative.
+        score = engine.evaluate("3qk3/8/8/8/8/8/8/4K3 b - - 0 1")
+        self.assertTrue(score.get("mate", 0) < 0 or score.get("cp", 0) < -300,
+                        score)
 
 
 if __name__ == "__main__":

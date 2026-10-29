@@ -23,7 +23,7 @@ from chesscheat.app import build_parser
 from chesscheat.assist import RemoteMoveEngine
 from chesscheat.interfaces import MirrorView, MoveEngine
 from chesscheat.mirror import (gui_placement, MirrorGame, position_map,
-                               view_bottom_white)
+                               view_bottom_white, white_share, score_label)
 from chesscheat.mocks import (MockMoveEngine, MockMoveActuator,
                               MockMirrorView)
 
@@ -704,6 +704,25 @@ class RemoteMoveEngineTests(unittest.TestCase):
         engine.best_move(fen)
         self.assertEqual(_BestMoveHandler.seen[-1]["elo"], 1800)
 
+    def test_evaluate_posts_the_flag_and_reads_the_score(self):
+        _BestMoveHandler.reply = {"move": None, "score": {"cp": 35}}
+        fen = board.to_full_fen(board.starting_board(), True)
+        self.assertEqual(RemoteMoveEngine(self.url).evaluate(fen),
+                         {"cp": 35})
+        self.assertEqual(_BestMoveHandler.seen,
+                         [{"fen": fen, "evaluate": True}])
+
+    def test_evaluate_without_a_score_is_none(self):
+        _BestMoveHandler.reply = {"move": "e2e4"}
+        self.assertIsNone(RemoteMoveEngine(self.url).evaluate("fen"))
+        _BestMoveHandler.reply = {"move": None, "score": "unknown"}
+        self.assertIsNone(RemoteMoveEngine(self.url).evaluate("fen"))
+
+    def test_evaluate_server_error_raises(self):
+        _BestMoveHandler.status = 503
+        with self.assertRaises(RuntimeError):
+            RemoteMoveEngine(self.url).evaluate("fen")
+
     def test_null_move_becomes_none(self):
         _BestMoveHandler.reply = {"move": None}
         self.assertIsNone(RemoteMoveEngine(self.url).best_move("x"))
@@ -756,6 +775,153 @@ class RequireTkTests(unittest.TestCase):
         message = str(raised.exception)
         self.assertIn("tkinter", message)
         self.assertIn("brew install python-tk@", message)
+
+
+class EvaluationMappingTests(unittest.TestCase):
+    """Scores map to a bar share and a label (dep-free)."""
+
+    def test_level_and_unknown_are_half(self):
+        self.assertEqual(white_share(None), 0.5)
+        self.assertEqual(white_share({}), 0.5)
+        self.assertEqual(white_share({"cp": 0}), 0.5)
+        self.assertEqual(score_label(None), "")
+        self.assertEqual(score_label({"cp": 0}), "+0.00")
+
+    def test_centipawns_move_the_bar_symmetrically(self):
+        up, down = white_share({"cp": 150}), white_share({"cp": -150})
+        self.assertGreater(up, 0.6)
+        self.assertLess(up, 0.9)
+        self.assertAlmostEqual(up + down, 1.0)
+        self.assertGreater(white_share({"cp": 2000}), 0.99)
+        self.assertEqual(score_label({"cp": 35}), "+0.35")
+        self.assertEqual(score_label({"cp": -120}), "-1.20")
+
+    def test_mate_saturates(self):
+        self.assertEqual(white_share({"mate": 3}), 1.0)
+        self.assertEqual(white_share({"mate": -2}), 0.0)
+        self.assertEqual(score_label({"mate": 3}), "M3")
+        self.assertEqual(score_label({"mate": -2}), "-M2")
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class EvaluationBarTests(unittest.TestCase):
+    """The controller scores every new position for the view's bar."""
+
+    def _game(self, playing_white, move="e2e4", score=None, auto=True):
+        self.engine = MockMoveEngine(move)
+        self.engine.score = score
+        self.view = MockMirrorView()
+        self.events = []
+        game = MirrorGame(playing_white, BOX, self.engine, MockMoveActuator(),
+                          self.view, auto=auto,
+                          on_event=lambda k, d: self.events.append((k, d)))
+        return game
+
+    def test_start_and_every_move_update_the_bar(self):
+        game = self._game(True, score={"cp": 35})
+        game.start()                       # start position, then 1.e4
+        self.assertEqual(self.view.evaluations[-1], (white_share({"cp": 35}),
+                                                     "+0.35"))
+        before = len(self.view.evaluations)
+        self.engine.score = {"cp": -20}
+        self.engine.move = "g1f3"
+        game.submit_move("c7", "c5")       # opponent move + reply
+        self.assertEqual(len(self.view.evaluations), before + 2)
+        self.assertEqual(self.view.evaluations[-1][1], "-0.20")
+        self.assertEqual(self.engine.evaluated[-1], game.fen)
+
+    def test_manual_move_and_undo_update_the_bar(self):
+        game = self._game(True, auto=False, score={"cp": 10})
+        game.start()
+        game.submit_move("e2", "e4")       # manual program move
+        game.submit_move("c7", "c5")
+        before = len(self.view.evaluations)
+        game.undo()
+        self.assertEqual(len(self.view.evaluations), before + 1)
+        self.assertEqual(self.engine.evaluated[-1], game.fen)
+
+    def test_an_engine_without_evaluation_shows_a_level_bar(self):
+        game = self._game(True)            # score None
+        game.start()
+        self.assertEqual(self.view.evaluations[-1], (0.5, ""))
+
+    def test_evaluation_failure_is_logged_not_raised(self):
+        class Failing(MockMoveEngine):
+            def evaluate(self, fen):
+                raise RuntimeError("boom")
+
+        view = MockMirrorView()
+        events = []
+        game = MirrorGame(True, BOX, Failing("e2e4"), MockMoveActuator(),
+                          view, on_event=lambda k, d: events.append((k, d)))
+        game.start()
+        self.assertEqual(view.evaluations[-1], (0.5, ""))
+        self.assertIn(("engine", "evaluation failed: boom"), events)
+
+    def test_game_over_shows_the_result_without_asking_the_engine(self):
+        game = self._game(True, move="f2f3", auto=False)
+        game.start()
+        for move in (("f2", "f3"), ("e7", "e5"), ("g2", "g4"), ("d8", "h4")):
+            game.submit_move(*move)        # fool's mate: black wins
+        self.assertEqual(self.view.evaluations[-1], (0.0, "0-1"))
+        self.assertNotIn(game.fen, self.engine.evaluated)
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class NewGameTests(unittest.TestCase):
+    """New game resets the position and side but keeps the real board."""
+
+    def _game(self, playing_white, move="e2e4"):
+        self.engine = MockMoveEngine(move)
+        self.actuator = MockMoveActuator()
+        self.view = MockMirrorView()
+        self.scheduler = _Scheduler()
+        self.now = [100.0]
+        self.events = []
+        game = MirrorGame(playing_white, BOX, self.engine, self.actuator,
+                          self.view, schedule=self.scheduler,
+                          clock=lambda: self.now[0],
+                          on_event=lambda k, d: self.events.append((k, d)))
+        game.start()
+        return game
+
+    def test_switching_to_black_reorients_and_waits(self):
+        game = self._game(True)
+        game.submit_move("c7", "c5")
+        game.new_game(False)
+        self.assertEqual(game.fen.split()[0], START_FEN)
+        self.assertFalse(game.playing_white)
+        self.assertIsNone(game.last_move)
+        self.assertEqual(self.view.orientations, [False])
+        self.assertIn(("new_game", "you play black"), self.events)
+        self.assertTrue(game.opponent_to_move)
+        self.assertEqual([a[0] for a in self.actuator.applied],
+                         ["e2e4"])            # nothing new played yet
+        self.assertFalse(game.undo())         # nothing to undo in the new game
+
+    def test_as_white_the_program_opens_on_the_same_box(self):
+        game = self._game(False, move="e7e5")
+        game.submit_move("e2", "e4")
+        self.engine.move = "d2d4"
+        game.new_game(True)
+        self.assertEqual(self.actuator.applied[-1], ("d2d4", BOX, True))
+        self.assertEqual(game.fen.split()[0],
+                         "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR")
+
+    def test_a_reply_pending_from_the_old_game_cannot_land(self):
+        game = self._game(True)
+        game.set_delay(5)
+        self.engine.move = "g1f3"
+        game.submit_move("c7", "c5")          # reply deferred (old game)
+        self.assertEqual(len(self.scheduler.pending), 1)
+        game.new_game(True)                   # its opener is deferred too
+        self.assertEqual(len(self.scheduler.pending), 2)
+        self.now[0] += 5
+        self.scheduler.fire()                 # stale timer + the new one
+        self.assertEqual([a[0] for a in self.actuator.applied],
+                         ["e2e4", "g1f3"])    # old game's e4, new opener
+        self.assertEqual(game.fen.split()[0],
+                         "rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R")
 
 
 if __name__ == "__main__":

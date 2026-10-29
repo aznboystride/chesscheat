@@ -27,6 +27,22 @@ class MoveEngine(ABC):
             position).
         """
 
+    def evaluate(self, fen):
+        """Score a position, for an evaluation display.
+
+        Optional: the default knows nothing and returns None, which a view
+        shows as an unknown (level) evaluation.
+
+        Args:
+            fen: A full FEN string including the side to move.
+
+        Returns:
+            ``{"cp": n}`` (centipawns) or ``{"mate": n}`` (moves to mate,
+            negative when black mates), both from **white's** perspective,
+            or None if the position cannot be scored.
+        """
+        return None
+
     def set_strength(self, elo):
         """Ask the engine to play at roughly a given rating.
 

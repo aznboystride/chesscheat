@@ -135,16 +135,34 @@ A control bar under the board adjusts the behaviour at any time, mid-game:
   waiting out the delay is cancelled. Only the mirror board is reverted:
   anything already dragged in the real app stays, so take it back there
   yourself if the app allows.
+- **New game** — starts over on the same real board: you are asked only
+  which colour you play now (Yes = white, No = black, Cancel keeps the
+  current game); the board region you clicked out at the start is reused.
+  The mirror board flips to put your new side at the bottom, any reply
+  still waiting is cancelled, and if you are white the program opens at
+  once.
+
+An **evaluation bar** runs down the left of the mirror board and updates
+after every move (yours, the opponent's, undos and new games): white's share
+grows from white's side, and the score is printed on it — `+0.35` in pawns
+from white's point of view, `M3` / `-M2` for a forced mate, the result
+(`1-0`, `0-1`, `1/2-1/2`) once the game is over. With the local engine this
+is a short Stockfish analysis at full strength regardless of the strength
+setting; a remote engine can supply it too (below), and one that doesn't
+leaves the bar level and blank.
 
 After the program has dragged its move in the real app, the mouse pointer is
 moved back onto the mirror board, to the square the opponent's last move
 ended on (where you last clicked), so your hand is where the next entry
-starts.
+starts. The drag itself is quick: about 0.15 s of travel (just enough for
+the app to see a drag rather than a jump), a few hundredths to let the
+window take focus, and none of `pyautogui`'s default pauses between calls.
 
 ### Choosing the decision maker
 
-The move chooser is the `MoveEngine` interface — `best_move(fen) -> uci` —
-and both modes take any implementation:
+The move chooser is the `MoveEngine` interface — `best_move(fen) -> uci`,
+plus an optional `evaluate(fen)` for the evaluation bar — and both modes
+take any implementation:
 
 | Implementation | Where the engine runs | Select it with |
 |---|---|---|
@@ -153,10 +171,17 @@ and both modes take any implementation:
 
 The remote protocol is minimal JSON: `POST` `{"fen": "<full FEN>", "elo": N}`
 (`elo` is the requested strength, `null` for full; a service may ignore it)
-and reply `{"move": "e2e4"}` (or `{"move": null}` for no move). Any service
-that speaks it works — a Stockfish on a beefier box, a cloud function, a
-different engine entirely. Implement `MoveEngine` yourself for anything else;
-override its optional `set_strength(elo)` if your engine can vary strength.
+and reply `{"move": "e2e4"}` (or `{"move": null}` for no move). For the
+evaluation bar the client also `POST`s `{"fen": "<full FEN>", "evaluate":
+true}` after every move and reads an optional `"score"` from the reply —
+`{"cp": 35}` (centipawns) or `{"mate": 3}` (moves to mate, negative when
+black mates), both from white's point of view; a service that doesn't
+evaluate can answer such requests with `{"move": null}` straight away and
+the bar stays blank. Any service that speaks this works — a Stockfish on a
+beefier box, a cloud function, a different engine entirely. Implement
+`MoveEngine` yourself for anything else; override its optional
+`set_strength(elo)` if your engine can vary strength and `evaluate(fen)` if
+it can score a position.
 
 ## Requirements
 

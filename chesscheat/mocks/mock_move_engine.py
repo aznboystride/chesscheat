@@ -8,7 +8,9 @@ class MockMoveEngine(MoveEngine):
 
     Attributes:
         move: The UCI move (or None) returned by every ``best_move`` call.
+        score: The score dict (or None) returned by every ``evaluate`` call.
         seen_fens: FENs passed to ``best_move``, in order.
+        evaluated: FENs passed to ``evaluate``, in order.
         strengths: Values passed to ``set_strength``, in order.
     """
 
@@ -19,7 +21,9 @@ class MockMoveEngine(MoveEngine):
             move: The UCI move ``best_move`` should return, or None.
         """
         self.move = move
+        self.score = None
         self.seen_fens = []
+        self.evaluated = []
         self.strengths = []
 
     def best_move(self, fen):
@@ -33,6 +37,18 @@ class MockMoveEngine(MoveEngine):
         """
         self.seen_fens.append(fen)
         return self.move
+
+    def evaluate(self, fen):
+        """Record ``fen`` and return the canned score.
+
+        Args:
+            fen: The position FEN; appended to ``evaluated``.
+
+        Returns:
+            The configured ``score``.
+        """
+        self.evaluated.append(fen)
+        return self.score
 
     def set_strength(self, elo):
         """Record a strength request.
