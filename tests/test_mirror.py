@@ -212,6 +212,11 @@ class _Scheduler:
         for _seconds, fn in pending:
             fn()
 
+    def fire_one(self):
+        """Run only the oldest pending callback."""
+        _seconds, fn = self.pending.pop(0)
+        fn()
+
 
 @unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
 class AutoToggleTests(unittest.TestCase):
@@ -421,6 +426,98 @@ class StrengthOptionTests(unittest.TestCase):
                 return "e2e4"
 
         self.assertIsNone(Fixed().set_strength(1500))   # no-op, no error
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class UndoTests(unittest.TestCase):
+    """Undo takes back the last opponent move and whatever followed it."""
+
+    def _game(self, playing_white, move, **kwargs):
+        engine, actuator, view = (MockMoveEngine(move), MockMoveActuator(),
+                                  MockMirrorView())
+        events = []
+        game = MirrorGame(playing_white, BOX, engine, actuator, view,
+                          on_event=lambda k, d: events.append((k, d)),
+                          **kwargs)
+        game.start()
+        return game, engine, actuator, view, events
+
+    def test_undo_reverts_opponent_move_and_reply(self):
+        game, engine, actuator, view, events = self._game(False, "e7e5")
+        game.submit_move("e2", "e4")              # opponent, reply e7e5
+        self.assertEqual(game.undo(), ["e7e5", "e2e4"])
+        self.assertEqual(board.to_fen(game.board_map()), START_FEN)
+        self.assertIsNone(game.last_move)
+        self.assertIn("Undid e7e5 and e2e4", view.updates[-1][2])
+        self.assertIn("real app is not changed", view.updates[-1][2])
+        self.assertIn("opponent's move (white)", view.updates[-1][2])
+        self.assertIn(("undo", "e7e5 e2e4"), events)
+        # Nothing new was played in the real app by the undo itself.
+        self.assertEqual([a[0] for a in actuator.applied], ["e7e5"])
+
+    def test_undo_when_user_is_white_keeps_programs_first_move(self):
+        game, engine, actuator, view, _ = self._game(True, "e2e4")
+        game.submit_move("e7", "e5")              # opponent; reply e2e4 again
+        # Stack: e2e4 (program), e7e5 (opponent), e2e4?? -- the mock always
+        # answers e2e4, which is illegal after 1.e4 e5, so no reply landed.
+        self.assertEqual(game.undo(), ["e7e5"])
+        self.assertEqual(game.last_move, "e2e4")  # program's opener stays
+        self.assertEqual(game.board_map()[(4, 4)], "P")
+
+    def test_nothing_to_undo_before_any_opponent_move(self):
+        game, _, _, view, _ = self._game(True, "e2e4")  # program opened
+        self.assertEqual(game.undo(), [])
+        self.assertIn("Nothing to undo", view.updates[-1][2])
+        self.assertEqual(game.board_map()[(4, 4)], "P")   # opener intact
+
+    def test_undo_with_reply_still_pending_cancels_it(self):
+        now = [100.0]
+        scheduler = _Scheduler()
+        game, engine, actuator, view, _ = self._game(
+            False, "e7e5", delay=5.0, clock=lambda: now[0],
+            schedule=scheduler)
+        game.submit_move("e2", "e4")              # reply deferred
+        self.assertEqual(game.undo(), ["e2e4"])   # only the opponent's ply
+        now[0] += 5.0
+        scheduler.fire()                          # stale commit must drop
+        self.assertEqual(actuator.applied, [])
+        self.assertEqual(board.to_fen(game.board_map()), START_FEN)
+
+    def test_stale_timer_cannot_land_after_undo_and_reentry(self):
+        now = [100.0]
+        scheduler = _Scheduler()
+        game, engine, actuator, _, _ = self._game(
+            False, "e7e5", delay=5.0, clock=lambda: now[0],
+            schedule=scheduler)
+        game.submit_move("e2", "e4")              # timer A (epoch 1)
+        game.undo()
+        now[0] = 103.0
+        game.submit_move("e2", "e4")              # same position again, timer B
+        self.assertEqual(len(scheduler.pending), 2)
+        scheduler.fire_one()                      # timer A: epoch mismatch
+        self.assertEqual(actuator.applied, [])
+        now[0] = 108.0
+        scheduler.fire_one()                      # timer B: lands once
+        self.assertEqual(actuator.applied, [("e7e5", BOX, False)])
+
+    def test_undo_while_paused_reverts_manual_move_too(self):
+        game, engine, actuator, view, _ = self._game(True, "e2e4",
+                                                     auto=False)
+        game.submit_move("e2", "e4")              # user plays white by hand
+        game.submit_move("e7", "e5")              # opponent
+        game.submit_move("g1", "f3")              # user plays white by hand
+        self.assertEqual(game.undo(), ["g1f3", "e7e5"])
+        self.assertEqual(game.last_move, "e2e4")
+        # Undo always lands on the opponent's turn, paused or not.
+        self.assertIn("opponent's move (black)", view.updates[-1][2])
+
+    def test_reentry_after_undo_gets_a_fresh_reply(self):
+        game, engine, actuator, _, _ = self._game(False, "e7e5")
+        game.submit_move("e2", "e4")
+        game.undo()
+        self.assertEqual(game.submit_move("d2", "d4"), "e7e5")
+        self.assertEqual(len(engine.seen_fens), 2)
+        self.assertEqual([a[0] for a in actuator.applied], ["e7e5", "e7e5"])
 
 
 class _BestMoveHandler(BaseHTTPRequestHandler):

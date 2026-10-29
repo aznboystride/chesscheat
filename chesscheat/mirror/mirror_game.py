@@ -47,6 +47,10 @@ class MirrorGame:
       and is cancelled if the position changes or auto is paused meanwhile.
     - strength -- forwarded to ``engine.set_strength`` for the next reply.
 
+    ``undo`` takes back the last opponent move together with whatever was
+    played after it (the engine's reply or a manual move), for correcting a
+    mis-entered move; only the mirror board is reverted.
+
     Which decision maker picks the reply is up to the injected
     ``MoveEngine`` (local Stockfish, a remote service, anything). Game rules
     come from **python-chess**, imported lazily so this module stays
@@ -99,6 +103,10 @@ class MirrorGame:
         self._schedule = schedule or (lambda seconds, fn: fn())
         self._game = chess.Board()
         self._opponent_time = clock()
+        # Bumped whenever the opponent's move history changes (a new opponent
+        # move, an undo) so a reply scheduled for an earlier state can never
+        # land -- even if the user re-enters the very same move.
+        self._epoch = 0
 
     # -- queries -----------------------------------------------------------
 
@@ -254,11 +262,53 @@ class MirrorGame:
         self._game.push(move)
         self.last_move = move.uci()
         self._opponent_time = self._clock()
+        self._epoch += 1
         self._on_event("opponent", move.uci())
         if self.auto and not self._game.is_game_over():
             return self._reply()
         self._refresh(self._turn_status())
         return None
+
+    def _has_opponent_move(self):
+        """Whether the move history contains a move by the opponent.
+
+        Returns:
+            True if an undo has something to revert. The program moves first
+            when it plays white, so then at least two plies are needed.
+        """
+        return len(self._game.move_stack) >= (2 if self.playing_white else 1)
+
+    def undo(self):
+        """Take back the last opponent move and everything played after it.
+
+        Pops the program's reply (or the user's manual move for the program's
+        side), if any, and then the opponent's move, so the board is back on
+        the opponent's turn ready for the corrected entry. Any reply still
+        waiting out the delay is cancelled. Only this board is reverted: the
+        real app keeps whatever was already dragged there.
+
+        Returns:
+            The undone moves in UCI, most recent first; empty if there was no
+            opponent move to take back.
+        """
+        if not self._has_opponent_move():
+            self._refresh("Nothing to undo.")
+            return []
+        import chess
+
+        opponent = chess.BLACK if self.playing_white else chess.WHITE
+        undone = []
+        while self._game.move_stack:
+            undone.append(self._game.pop().uci())
+            if self._game.turn == opponent:   # that ply was the opponent's
+                break
+        self._epoch += 1
+        self.last_move = (self._game.move_stack[-1].uci()
+                          if self._game.move_stack else None)
+        self._on_event("undo", " ".join(undone))
+        self._refresh(f"Undid {' and '.join(undone)} on this board (the real "
+                      f"app is not changed). {self._turn_status()}")
+        return undone
 
     def _reply(self):
         """Ask the engine for the program's move and play it after the delay.
@@ -288,26 +338,30 @@ class MirrorGame:
             self._refresh(f"Engine proposed an illegal move: {uci}")
             return None
 
-        return self._commit_after_delay(uci, self._game.fen())
+        return self._commit_after_delay(uci, self._game.fen(), self._epoch)
 
-    def _commit_after_delay(self, uci, fen):
+    def _commit_after_delay(self, uci, fen, epoch):
         """Play ``uci`` once the delay has elapsed, if still applicable.
 
         Args:
             uci: The engine's chosen move.
             fen: The position it was chosen for; the commit is dropped if
                 the game has moved on.
+            epoch: The opponent-history epoch it was chosen in; the commit
+                is dropped if an opponent move or an undo happened since.
 
         Returns:
             The UCI if played now, else None (deferred or dropped).
         """
-        if not self.auto or self._game.fen() != fen:
+        if (not self.auto or epoch != self._epoch
+                or self._game.fen() != fen):
             return None
         remaining = self.delay - (self._clock() - self._opponent_time)
         if remaining <= 0:
             return self._play_program_move(uci, "program")
         self._refresh(f"Waiting {remaining:.1f}s before replying...")
-        self._schedule(remaining, lambda: self._commit_after_delay(uci, fen))
+        self._schedule(remaining,
+                       lambda: self._commit_after_delay(uci, fen, epoch))
         return None
 
     def _play_program_move(self, uci, source):

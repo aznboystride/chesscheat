@@ -105,6 +105,12 @@ A control bar under the board adjusts the behaviour at any time, mid-game:
   local engine this sets Stockfish's `UCI_LimitStrength`/`UCI_Elo` (clamped
   to the engine's supported range); the remote engine receives it as `elo`
   in each request. Takes effect from the next reply.
+- **Undo** — takes back the last opponent move *and* whatever followed it
+  (the engine's reply, or your own manual move), putting the board back on
+  the opponent's turn so you can enter the correct move. A reply still
+  waiting out the delay is cancelled. Only the mirror board is reverted:
+  anything already dragged in the real app stays, so take it back there
+  yourself if the app allows.
 
 ### Choosing the decision maker
 

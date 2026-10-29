@@ -394,13 +394,15 @@ def mirror_main(engine_url=None):
         on_move, bottom_white=view_bottom_white(playing_white), avoid_box=box,
         on_auto=lambda enabled: mirror.set_auto(enabled),
         on_delay=lambda seconds: mirror.set_delay(seconds),
-        on_strength=lambda elo: mirror.set_strength(elo))
+        on_strength=lambda elo: mirror.set_strength(elo),
+        on_undo=lambda: mirror.undo())
     mirror = MirrorGame(playing_white, box, engine, PyAutoGuiActuator(),
                         view, on_event=log, schedule=view.schedule)
     log("mode", f"you play {'white' if playing_white else 'black'}; "
                 f"enter {'black' if playing_white else 'white'}'s moves. "
                 "Toggle Auto-play, the reply delay and the strength in the "
-                "window at any time.")
+                "window at any time; Undo takes back a mis-entered opponent "
+                "move and the reply to it.")
     mirror.start()
     view.run()
 

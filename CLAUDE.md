@@ -296,6 +296,14 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   playing_white)` (the **real app's** orientation = the user's side). Engine
   and actuator exceptions become status/events, never crashes; an actuator
   failure leaves the GUI move standing so the boards stay in sync.
+- `undo()` pops plies until the last **opponent** ply is removed (so the
+  reply or a manual program move goes too), back onto the opponent's turn;
+  `[]`/"Nothing to undo" when no opponent ply exists (the program's opening
+  move alone never undoes). An `_epoch` counter, bumped on every opponent
+  move and every undo and captured by scheduled commits, guarantees a reply
+  deferred for an earlier state can never land -- even if the user
+  re-enters the same move (the FEN check alone couldn't tell). Only the
+  mirror board reverts; the status says the real app is unchanged.
 - `gui_placement(box, screen_w, screen_h, win_w, win_h)` (pure) positions the
   GUI right/left/below/above the real board — never on top of it, since the
   mouse drags land there. `view_bottom_white(playing_white)` (pure) fixes the
@@ -307,7 +315,8 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   `bottom_white = view_bottom_white(playing_white)`, unicode
   piece glyphs, click-origin then click-destination → `on_move`,
   last-move/selection highlights, status line, and a control bar (Auto-play
-  checkbox, reply-delay spinbox, strength menu from `STRENGTHS` presets)
+  checkbox, reply-delay spinbox, strength menu from `STRENGTHS` presets,
+  Undo button → `on_undo`)
   reporting each change through its callback; `schedule(seconds, fn)` wraps
   Tk `after` for the controller's non-blocking delay; `run()` is the Tk
   mainloop (this mode has no capture loop).
@@ -413,7 +422,10 @@ time are recognised exactly.
   mid-turn replies at once; the delay (fake clock + recording scheduler):
   engine consulted immediately but the commit deferred, fired commit plays,
   cancelled by a pause or a position change, extended when raised; strength
-  forwarded to the engine. `RemoteMoveEngine`
+  forwarded to the engine; undo (reverts reply+opponent move, keeps the
+  program's opener, cancels a pending reply, a stale timer can't land after
+  undo+re-entry thanks to the epoch, reverts a manual move too, re-entry
+  gets a fresh reply). `RemoteMoveEngine`
   against a real local `http.server` (protocol, null move, 5xx, malformed,
   unreachable). `build_parser` modes/engine-url.
 - `test_assist.py` — the move assist, dep-free via mocks: `cell_of`/
