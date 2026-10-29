@@ -137,9 +137,10 @@ override its optional `set_strength(elo)` if your engine can vary strength.
 ## Installation
 
 Use the setup script to create a virtual environment, install the Python
-dependencies, and download a Stockfish engine matching your machine — on an
-Apple Silicon Mac (M1–M4) it fetches the `macos-m1-apple-silicon` build and
-installs it into `venv/bin`, ready for the move assist:
+dependencies, and download a Stockfish engine matching your machine — the
+current Stockfish releases ship one *universal* build per platform (on any
+Mac, Apple Silicon or Intel, that's `stockfish-macos-universal`), installed
+into `venv/bin`, ready for the move assist and mirror mode:
 
 ```bash
 ./setup.sh

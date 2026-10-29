@@ -36,8 +36,9 @@ There is no build step or linter config. Runtime dependencies (`mss`,
 `numpy`, `chess`, `pyautogui`, `pynput`) live in `requirements.txt`; `setup.sh`
 builds a `venv/`, installs them (honors a `PYTHON` env var override), and then
 downloads a **Stockfish** binary matching the host into `venv/bin` via
-`scripts/install_stockfish.py` (Apple Silicon → `macos-m1-apple-silicon`
-build; skip with `SKIP_STOCKFISH=1`, pin with `STOCKFISH_VERSION`). That step
+`scripts/install_stockfish.py` (Stockfish 19+ universal builds, e.g.
+`macos-universal` for any Mac; skip with `SKIP_STOCKFISH=1`, pin with
+`STOCKFISH_VERSION`). That step
 is non-fatal — the reader still runs without the move assist. Installing
 manually works too: `pip install -r requirements.txt`. The entire test suite
 still *runs* with **no** third-party deps installed: the dep-free tests
@@ -225,11 +226,17 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   (skipped if the engine has no `UCI_Elo` option). The binary is normally supplied by
   `scripts/install_stockfish.py` (run from `setup.sh`), which picks the
   release asset for the host — `asset_candidates`/`select_asset` map
-  system/machine to the right `.tar` (Apple Silicon M1–M4 → the single
-  `macos-m1-apple-silicon` build) — downloads it from the official Stockfish
-  GitHub releases, installs it as `venv/bin/stockfish` and clears the macOS
-  quarantine flag. Stdlib-only; the selection logic is pure and tested in
-  `test_install_stockfish.py` (no network).
+  system/machine to the right tarball. Since **Stockfish 19** every platform
+  ships one *universal* build (`stockfish-macos-universal.tar.gz`,
+  `stockfish-linux-x86-64-universal.tar.gz`, …, gzip tarballs), tried first;
+  the pre-19 per-CPU names (`macos-m1-apple-silicon.tar`,
+  `ubuntu-x86-64-avx2.tar`, …) are fallbacks for a pinned older release.
+  `.tar`/`.tar.gz`/`.tgz` accepted, `.zip` never. It downloads from the
+  official Stockfish GitHub releases, extracts into a subfolder (so the
+  largest-file search can't pick the archive itself), installs it as
+  `venv/bin/stockfish` and clears the macOS quarantine flag. Stdlib-only;
+  selection and extraction are tested in `test_install_stockfish.py`
+  (no network).
 - `RemoteMoveEngine(url)` — the second decision maker: ``POST {"fen": …,
   "elo": …}`` to an HTTP endpoint (``elo`` from `set_strength`, null = full),
   reads ``{"move": "e2e4"}`` (``null`` → None).
@@ -380,11 +387,14 @@ time are recognised exactly.
   loops back to reselection, the preview never consumes the calibration
   frame, prompt y/n and fallback forwarding, and `_image_to_ppm` encoding
   (grayscale lists dep-free; BGRA/RGB/gray arrays `skipUnless(numpy)`).
-- `test_install_stockfish.py` — the Stockfish installer's pure
-  platform/asset selection (`asset_candidates`/`select_asset`): M1–M4 Mac →
-  `macos-m1-apple-silicon.tar`, Intel-Mac/Linux ordering and fallbacks,
-  `.tar`-only, unsupported platforms → None. Loads `scripts/install_stockfish.py`
-  by path; dep-free, no network.
+- `test_install_stockfish.py` — the Stockfish installer: pure
+  platform/asset selection (`asset_candidates`/`select_asset`) against the
+  real Stockfish 19 asset list (universal `.tar.gz` builds: M1–M4 and Intel
+  Macs → `macos-universal`, Linux x86-64/arm64) and a pre-19 list (legacy
+  per-CPU `.tar` fallbacks), `.zip` never, unsupported → None; plus archive
+  handling with a self-built tarball (gzip and plain extraction, the binary
+  found in the extracted tree and never the archive, path-escape refused).
+  Loads `scripts/install_stockfish.py` by path; dep-free, no network.
 - `test_mirror.py` — mirror mode: `gui_placement` (right/left/below/above
   fallbacks, never over the box; dep-free), `position_map`, and `MirrorGame`
   through the mocks (`skipUnless(chess)`): program-as-white moves first in
