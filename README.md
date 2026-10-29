@@ -59,12 +59,69 @@ the mouse on the board:
 
 The engine is behind the `MoveEngine` interface (`best_move(fen) -> uci`), so
 any engine can be dropped in. The assist is optional: if Stockfish, `pyautogui`
-or `pynput` aren't available the reader prints why and runs without it.
+or `pynput` aren't available the reader prints why and runs without it. Set
+`CHESSCHEAT_NO_ASSIST=1` to turn it off entirely.
+
+> **macOS:** the global keybind needs **Input Monitoring** permission (and
+> **Accessibility** to move the mouse). Grant them to your terminal under
+> *System Settings → Privacy & Security*, then restart it. Without Input
+> Monitoring, macOS would kill the process with a "trace trap" when the
+> listener starts — the program now detects this up front and simply disables
+> the assist with a message instead of crashing.
 
 > **Heads up.** This automates mouse input to play moves on your behalf. Using
 > engine assistance in online games violates the rules of every major chess
 > site and will get accounts banned. Use it for analysis, bots, and local
 > experimentation.
+
+### Mirror mode (no detection)
+
+`python3 -m chesscheat --mode mirror` skips screen reading entirely. You pick
+your side and click the real board's corners, and a **mirror board** opens
+next to it, drawn from the **opponent's** perspective (their pieces at the
+bottom). Play each opponent move on the mirror board — click the origin
+square, then the destination — and the program answers immediately in two
+places: on the mirror board, and in the real chess app, by dragging the
+piece over the region you selected. Illegal entries are refused with a
+message; a pawn you push to the last rank promotes to a queen. If you play
+white the program opens with white's first move; if you play black it waits
+for you to enter white's move.
+
+The mirror window is placed off the real board (right, left, below or above
+it, whichever fits) so it never sits under the mouse drags.
+
+A control bar under the board adjusts the behaviour at any time, mid-game:
+
+- **Auto-play** (toggle) — on: the engine chooses and plays your side's moves.
+  Off: auto-play pauses and *you* play your side on the mirror board by hand
+  (click origin, click destination); those moves are still played in the
+  real app for you. Switching it back on while it's your side's turn makes
+  the program reply immediately.
+- **Reply delay (s)** — the minimum time between the opponent's move and the
+  program's reply. The engine thinks straight away but the move is held back
+  until the delay has elapsed (the window stays responsive, so you can pause
+  during the wait). Raising it extends a pending wait.
+- **Strength** — full strength or a target Elo (2800 down to 1400). With the
+  local engine this sets Stockfish's `UCI_LimitStrength`/`UCI_Elo` (clamped
+  to the engine's supported range); the remote engine receives it as `elo`
+  in each request. Takes effect from the next reply.
+
+### Choosing the decision maker
+
+The move chooser is the `MoveEngine` interface — `best_move(fen) -> uci` —
+and both modes take any implementation:
+
+| Implementation | Where the engine runs | Select it with |
+|---|---|---|
+| `StockfishMoveEngine` (default) | locally, the binary `setup.sh` installed | nothing to do |
+| `RemoteMoveEngine` | on another machine, behind an HTTP endpoint | `--engine-url URL` or `CHESSCHEAT_ENGINE_URL` |
+
+The remote protocol is minimal JSON: `POST` `{"fen": "<full FEN>", "elo": N}`
+(`elo` is the requested strength, `null` for full; a service may ignore it)
+and reply `{"move": "e2e4"}` (or `{"move": null}` for no move). Any service
+that speaks it works — a Stockfish on a beefier box, a cloud function, a
+different engine entirely. Implement `MoveEngine` yourself for anything else;
+override its optional `set_strength(elo)` if your engine can vary strength.
 
 ## Requirements
 
@@ -206,6 +263,15 @@ using a translucent borderless window instead of Tk fullscreen (which moves
 into its own black Space). If the overlay ever misbehaves, press `Escape` or
 right-click to cancel it, and the text-prompt fallback can be used by
 entering the corner coordinates by hand.
+
+**It crashed with "zsh: trace trap" right after I confirmed the board
+(macOS).** That was the global assist keybind: macOS kills the process when a
+keyboard listener starts without **Input Monitoring** permission. Grant your
+terminal Input Monitoring (and Accessibility, to move the mouse) under
+*System Settings → Privacy & Security*, then restart it. The program now
+checks this permission before starting the listener and, if it's missing,
+prints a message and runs without the assist instead of crashing. You can
+also disable the assist entirely with `CHESSCHEAT_NO_ASSIST=1`.
 
 ## Tests
 

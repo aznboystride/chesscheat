@@ -170,6 +170,55 @@ class RunTriggerIntegrationTests(unittest.TestCase):
         self.assertEqual(actuator.applied, [("e2e4", (0, 0, 8, 8), True)])
 
 
+class TriggerStartFailureTests(unittest.TestCase):
+    """A trigger that fails to start disables the assist, not the reader."""
+
+    class _FailingTrigger(MockMoveTrigger):
+        def start(self):
+            raise PermissionError("no input monitoring")
+
+    def test_reader_survives_a_failing_trigger(self):
+        positions = [board.starting_board()]
+        e4 = dict(positions[0])
+        e4[(4, 2)], e4[(4, 4)] = ".", "P"
+        positions.append(e4)
+        frames = [render_mock_image(p, True) for p in positions]
+
+        trigger = self._FailingTrigger()
+        trigger.fire()   # even though queued, it must never be polled
+        boards, assists = [], []
+        # Must not raise despite start() failing.
+        app.run(
+            MockSetupProvider(True, (0, 0, 8, 8)),
+            lambda box: MockFrameSource(frames),
+            TemplateBoardRecognizer(MockImageBackend()),
+            on_board=lambda board_map, _white: boards.append(board_map),
+            trigger=trigger,
+            on_trigger=lambda *a: assists.append(a),
+        )
+        self.assertEqual(len(boards), 1)   # the reader ran normally
+        self.assertEqual(assists, [])      # assist path was disabled
+
+
+class KeyTriggerPermissionTests(unittest.TestCase):
+    def test_permission_ok_true_off_macos(self):
+        import sys
+        from chesscheat.assist.key_trigger import KeyTrigger, has_input_monitoring
+
+        if sys.platform != "darwin":
+            self.assertTrue(has_input_monitoring())
+            self.assertTrue(KeyTrigger("a").permission_ok())
+
+    def test_start_raises_instead_of_crashing_without_permission(self):
+        from chesscheat.assist.key_trigger import KeyTrigger
+
+        trigger = KeyTrigger("a")
+        # Force the "no permission" branch regardless of platform.
+        trigger.permission_ok = lambda: False
+        with self.assertRaises(PermissionError):
+            trigger.start()
+
+
 class InterfaceConformanceTests(unittest.TestCase):
     def test_mocks_implement_interfaces(self):
         self.assertIsInstance(MockMoveEngine(), MoveEngine)

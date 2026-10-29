@@ -4,7 +4,14 @@ from abc import ABC, abstractmethod
 
 
 class MoveEngine(ABC):
-    """Computes a best move for a position given as a FEN."""
+    """Computes a best move for a position given as a FEN.
+
+    The decision maker behind the program's moves. Implementations may run
+    anything anywhere -- a local engine binary, a remote service, a lookup
+    table. ``set_strength`` is optional to honour: the base implementation
+    is a no-op, so engines that cannot vary their strength simply play as
+    they are.
+    """
 
     @abstractmethod
     def best_move(self, fen):
@@ -19,3 +26,15 @@ class MoveEngine(ABC):
             or None if there is no move to make (game over or invalid
             position).
         """
+
+    def set_strength(self, elo):
+        """Ask the engine to play at roughly a given rating.
+
+        Takes effect for subsequent ``best_move`` calls, so it may be
+        changed at any time. The default ignores the request.
+
+        Args:
+            elo: Target playing strength as an Elo rating, or None for the
+                engine's full strength.
+        """
+        return None

@@ -4,11 +4,12 @@ from chesscheat.interfaces import MoveEngine
 
 
 class MockMoveEngine(MoveEngine):
-    """Returns a canned move and records the FENs it was asked about.
+    """Returns a canned move and records how it was used.
 
     Attributes:
         move: The UCI move (or None) returned by every ``best_move`` call.
         seen_fens: FENs passed to ``best_move``, in order.
+        strengths: Values passed to ``set_strength``, in order.
     """
 
     def __init__(self, move="e2e4"):
@@ -19,6 +20,7 @@ class MockMoveEngine(MoveEngine):
         """
         self.move = move
         self.seen_fens = []
+        self.strengths = []
 
     def best_move(self, fen):
         """Record ``fen`` and return the canned move.
@@ -31,3 +33,11 @@ class MockMoveEngine(MoveEngine):
         """
         self.seen_fens.append(fen)
         return self.move
+
+    def set_strength(self, elo):
+        """Record a strength request.
+
+        Args:
+            elo: The requested rating (or None); appended to ``strengths``.
+        """
+        self.strengths.append(elo)

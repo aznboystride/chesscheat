@@ -13,6 +13,7 @@ from chesscheat.interfaces.board_recognizer import BoardRecognizer
 from chesscheat.interfaces.move_engine import MoveEngine
 from chesscheat.interfaces.move_actuator import MoveActuator
 from chesscheat.interfaces.move_trigger import MoveTrigger
+from chesscheat.interfaces.mirror_view import MirrorView
 
 __all__ = ["SetupProvider", "FrameSource", "ImageBackend", "BoardRecognizer",
-           "MoveEngine", "MoveActuator", "MoveTrigger"]
+           "MoveEngine", "MoveActuator", "MoveTrigger", "MirrorView"]

@@ -14,6 +14,7 @@ from chesscheat.mocks.mock_image_backend import MockImageBackend
 from chesscheat.mocks.mock_move_engine import MockMoveEngine
 from chesscheat.mocks.mock_move_actuator import MockMoveActuator
 from chesscheat.mocks.mock_move_trigger import MockMoveTrigger
+from chesscheat.mocks.mock_mirror_view import MockMirrorView
 from chesscheat.mocks.synthetic_image import render_mock_image, LABELS
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "MockMoveEngine",
     "MockMoveActuator",
     "MockMoveTrigger",
+    "MockMirrorView",
     "render_mock_image",
     "LABELS",
 ]

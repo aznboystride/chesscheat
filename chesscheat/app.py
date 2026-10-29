@@ -7,7 +7,9 @@ first frame (the starting position) and then reports every subsequent frame.
 ``main`` wires the real GUI/screen/numpy implementations; tests wire mocks.
 """
 
+import argparse
 import collections
+import os
 import sys
 import time
 
@@ -61,7 +63,13 @@ def run(setup, make_frame_source, recognizer, *, on_board,
     recognizer.calibrate(frames.grab(), playing_white)
 
     if trigger is not None:
-        trigger.start()
+        try:
+            trigger.start()
+        except Exception as exc:
+            # A trigger that can't start (e.g. missing OS permission) disables
+            # the assist -- it must never take down the reader.
+            print(f"Move assist disabled: {exc}")
+            trigger = None
     try:
         while True:
             try:
@@ -177,31 +185,68 @@ SSIM_THRESHOLD = 0.6
 ASSIST_KEY = "a"
 
 
-def _build_assist(on_event):
+def build_engine(engine_url=None):
+    """Pick the decision maker behind the ``MoveEngine`` interface.
+
+    Args:
+        engine_url: URL of a remote best-move service; falls back to the
+            ``CHESSCHEAT_ENGINE_URL`` environment variable. When neither is
+            set, a local Stockfish binary is used.
+
+    Returns:
+        A ``RemoteMoveEngine`` for a URL, else a ``StockfishMoveEngine``.
+
+    Raises:
+        FileNotFoundError: If no URL is given and no Stockfish binary is
+            found.
+    """
+    from chesscheat.assist import StockfishMoveEngine, RemoteMoveEngine
+
+    url = engine_url or os.environ.get("CHESSCHEAT_ENGINE_URL")
+    return RemoteMoveEngine(url) if url else StockfishMoveEngine()
+
+
+def _build_assist(on_event, engine_url=None):
     """Try to wire the move-assist (engine + mouse + keybind).
 
-    The assist needs a Stockfish binary plus ``pyautogui`` and ``pynput``.
-    If any is missing this returns no-op wiring and prints why, so the reader
-    still runs without the assist.
+    The assist needs a decision maker (local Stockfish, or a remote service
+    via ``engine_url``) plus ``pyautogui`` and ``pynput``. If any is missing
+    this returns no-op wiring and prints why, so the reader still runs
+    without the assist.
 
     Args:
         on_event: The console activity callback, used to log assist actions.
+        engine_url: Optional remote engine URL (see ``build_engine``).
 
     Returns:
         A ``(trigger, on_trigger)`` pair for ``run``; ``trigger`` is None
         when the assist is unavailable.
     """
-    from chesscheat.assist import (StockfishMoveEngine, PyAutoGuiActuator,
-                                   KeyTrigger, assist_move)
+    noop = lambda board_map, playing_white, box: None
+
+    if os.environ.get("CHESSCHEAT_NO_ASSIST"):
+        print("Move assist disabled (CHESSCHEAT_NO_ASSIST set).\n")
+        return None, noop
+
+    from chesscheat.assist import PyAutoGuiActuator, KeyTrigger, assist_move
     try:
         import pyautogui  # noqa: F401  -- probe availability early
         import pynput  # noqa: F401
-        engine = StockfishMoveEngine()
+        engine = build_engine(engine_url)
         actuator = PyAutoGuiActuator()
         trigger = KeyTrigger(ASSIST_KEY)
     except (ImportError, FileNotFoundError) as exc:
         print(f"Move assist disabled ({exc}).\n")
-        return None, lambda board_map, playing_white, box: None
+        return None, noop
+
+    # On macOS the global keybind needs Input Monitoring permission; without
+    # it, starting the listener aborts the process (a "trace trap"). Check up
+    # front and disable the assist gracefully instead of crashing later.
+    if not trigger.permission_ok():
+        print(f"Move assist disabled: grant your terminal Input Monitoring "
+              "(and Accessibility) in System Settings -> Privacy & Security, "
+              f"then restart to use the '{ASSIST_KEY.upper()}' keybind.\n")
+        return None, noop
 
     print(f"Move assist ready: press '{ASSIST_KEY.upper()}' on your turn to "
           "play the engine's best move.\n")
@@ -219,8 +264,12 @@ def _build_assist(on_event):
     return trigger, on_trigger
 
 
-def main():
-    """Wire the real implementations and run the live reader."""
+def reader_main(engine_url=None):
+    """Wire the real implementations and run the live reader.
+
+    Args:
+        engine_url: Optional remote engine URL for the move assist.
+    """
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
                                       FallbackSetupProvider, ScreenFrameSource)
     from chesscheat.recognition import (TemplateBoardRecognizer,
@@ -268,13 +317,105 @@ def main():
         seen["unknown"] = unknown
         console_frame(image)
 
-    trigger, on_trigger = _build_assist(on_event)
+    trigger, on_trigger = _build_assist(on_event, engine_url)
 
     run(setup, ScreenFrameSource, recognizer,
         on_board=on_board, on_frame=on_frame,
         before_calibrate=lambda: print(
             "\nCapture confirmed -- calibrating from the starting position..."),
         interval=0.3, trigger=trigger, on_trigger=on_trigger)
+
+
+def mirror_main(engine_url=None):
+    """Run mirror mode: a GUI where the user plays the opponent's moves.
+
+    Asks for the user's side and the real chess app's board box, then opens
+    a mirror board oriented from the opponent's perspective. Each opponent
+    move the user enters is answered by the engine, and the reply is played
+    on the mirror board and -- by dragging the mouse over the box -- in the
+    real app.
+
+    Args:
+        engine_url: Optional remote engine URL (see ``build_engine``).
+    """
+    from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
+                                      FallbackSetupProvider)
+    from chesscheat.assist import PyAutoGuiActuator
+    from chesscheat.mirror import MirrorGame
+    from chesscheat.gui import MirrorBoardWindow
+
+    print("=== Mirror Mode ===")
+    print("Pick your side, then click the real board's corners. A mirror "
+          "board opens from the\nopponent's perspective: enter each opponent "
+          "move on it and the program answers\nthere and in the real app.\n")
+    if sys.platform == "darwin":
+        print("Note (macOS): moving the mouse needs Accessibility permission "
+              "for your terminal\n(System Settings → Privacy & Security → "
+              "Accessibility).\n")
+
+    try:
+        engine = build_engine(engine_url)
+    except FileNotFoundError as exc:
+        raise SystemExit(f"No decision maker available: {exc}")
+
+    setup = FallbackSetupProvider(GuiSetupProvider(), PromptSetupProvider())
+    playing_white = setup.select_side()
+    box = setup.select_box()
+
+    def log(kind, detail):
+        print(f"[{time.strftime('%H:%M:%S')}] {kind}: {detail}", flush=True)
+
+    def on_move(origin, destination):
+        mirror.submit_move(origin, destination)   # bound below
+
+    view = MirrorBoardWindow(
+        on_move, bottom_white=not playing_white, avoid_box=box,
+        on_auto=lambda enabled: mirror.set_auto(enabled),
+        on_delay=lambda seconds: mirror.set_delay(seconds),
+        on_strength=lambda elo: mirror.set_strength(elo))
+    mirror = MirrorGame(playing_white, box, engine, PyAutoGuiActuator(),
+                        view, on_event=log, schedule=view.schedule)
+    log("mode", f"you play {'white' if playing_white else 'black'}; "
+                f"enter {'black' if playing_white else 'white'}'s moves. "
+                "Toggle Auto-play, the reply delay and the strength in the "
+                "window at any time.")
+    mirror.start()
+    view.run()
+
+
+def build_parser():
+    """Build the command-line parser.
+
+    Returns:
+        An ``argparse.ArgumentParser`` with ``--mode`` and ``--engine-url``.
+    """
+    parser = argparse.ArgumentParser(
+        prog="chesscheat",
+        description="Read a chessboard off the screen, or mirror a game and "
+                    "let an engine play your moves.")
+    parser.add_argument(
+        "--mode", choices=("reader", "mirror"), default="reader",
+        help="'reader' (default) watches the screen and prints the position; "
+             "'mirror' opens a board where you enter the opponent's moves and "
+             "the engine plays yours, in the GUI and in the real app.")
+    parser.add_argument(
+        "--engine-url", default=None,
+        help="URL of a remote best-move service (POST {fen} -> {move}); "
+             "defaults to CHESSCHEAT_ENGINE_URL, else a local Stockfish.")
+    return parser
+
+
+def main(argv=None):
+    """Parse the command line and run the chosen mode.
+
+    Args:
+        argv: Argument list; defaults to ``sys.argv[1:]``.
+    """
+    args = build_parser().parse_args(argv)
+    if args.mode == "mirror":
+        mirror_main(args.engine_url)
+    else:
+        reader_main(args.engine_url)
 
 
 if __name__ == "__main__":
