@@ -100,10 +100,13 @@ A control bar under the board adjusts the behaviour at any time, mid-game:
   (click origin, click destination); those moves are still played in the
   real app for you. Switching it back on while it's your side's turn makes
   the program reply immediately.
-- **Reply delay (s)** — the minimum time between the opponent's move and the
-  program's reply. The engine thinks straight away but the move is held back
-  until the delay has elapsed (the window stays responsive, so you can pause
-  during the wait). Raising it extends a pending wait.
+- **Reply delay (s) min / max** — the minimum time between the opponent's
+  move and the program's reply. Set both ends equal for a fixed delay, or
+  apart to add **random jitter**: every reply draws its own delay uniformly
+  from the range, so the timing doesn't look mechanical. The engine thinks
+  straight away but the move is held back until the delay has elapsed (the
+  window stays responsive, so you can pause during the wait). Changing the
+  range while a reply is waiting redraws its delay from the new range.
 - **Strength** — full strength or a target Elo (2800 down to 1400). With the
   local engine this sets Stockfish's `UCI_LimitStrength`/`UCI_Elo` (clamped
   to the engine's supported range); the remote engine receives it as `elo`
@@ -114,6 +117,11 @@ A control bar under the board adjusts the behaviour at any time, mid-game:
   waiting out the delay is cancelled. Only the mirror board is reverted:
   anything already dragged in the real app stays, so take it back there
   yourself if the app allows.
+
+After the program has dragged its move in the real app, the mouse pointer is
+moved back onto the mirror board, to the square the opponent's last move
+ended on (where you last clicked), so your hand is where the next entry
+starts.
 
 ### Choosing the decision maker
 

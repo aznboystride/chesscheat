@@ -146,6 +146,16 @@ class ActuatorSequenceTests(unittest.TestCase):
         self.assertEqual(names.index("click") + 1, names.index("mouseDown"))
 
 
+    def test_point_to_moves_without_clicking(self):
+        from unittest import mock
+        from chesscheat.assist import PyAutoGuiActuator
+
+        fake = self._FakePyAutoGui()
+        with mock.patch.dict("sys.modules", {"pyautogui": fake}):
+            PyAutoGuiActuator().point_to(321, 654)
+        self.assertEqual(fake.calls, [("moveTo", 321, 654, None)])
+
+
 class AssistMoveTests(unittest.TestCase):
     def test_builds_fen_with_side_to_move_and_plays(self):
         engine = MockMoveEngine("e2e4")

@@ -26,9 +26,12 @@ class MirrorBoardWindow(MirrorView):
     status line says whose turn it is.
 
     A control bar under the board exposes the runtime settings -- an
-    **Auto-play** toggle, a minimum **reply delay** in seconds, the engine
-    **strength**, and an **Undo** button that takes back the last opponent
-    move and the reply to it -- each reported through its own callback. ``schedule`` defers work on the Tk event loop so a delayed
+    **Auto-play** toggle, a **reply delay range** (min/max seconds; equal
+    for a fixed delay, apart for random jitter), the engine **strength**,
+    and an **Undo** button that takes back the last opponent move and the
+    reply to it -- each reported through its own callback.
+    ``square_position`` tells the controller where a square is on screen so
+    the pointer can be returned here after a move in the real app. ``schedule`` defers work on the Tk event loop so a delayed
     reply never freezes the window.
 
     Driven by ``run`` (Tk mainloop); redrawn through ``update``. tkinter is
@@ -56,12 +59,15 @@ class MirrorBoardWindow(MirrorView):
             cell: Square size in pixels.
             title: Window title.
             on_auto: Callback ``(enabled)`` when the auto-play toggle changes.
-            on_delay: Callback ``(seconds)`` when the reply delay changes.
+            on_delay: Callback ``(min_seconds, max_seconds)`` whenever either
+                end of the reply-delay range changes; equal ends mean a
+                fixed delay, otherwise each reply is jittered within them.
             on_strength: Callback ``(elo_or_None)`` when the strength changes.
             on_undo: Callback ``()`` when the Undo button is pressed (take
                 back the last opponent move and the reply to it).
             auto: Initial state of the auto-play toggle.
-            delay: Initial reply delay shown, in seconds.
+            delay: Initial reply delay shown: seconds, or a ``(min, max)``
+                pair.
             elo: Initial strength shown (None = full strength).
         """
         import tkinter as tk
@@ -117,23 +123,30 @@ class MirrorBoardWindow(MirrorView):
             command=lambda: on_auto and on_auto(self._auto_var.get()),
         ).pack(side="left")
 
-        tk.Label(bar, text="  Reply delay (s):").pack(side="left")
-        self._delay_var = tk.StringVar(master=self._root, value=f"{delay:g}")
+        tk.Label(bar, text="  Reply delay (s) min:").pack(side="left")
+        lo, hi = delay if isinstance(delay, (tuple, list)) else (delay, delay)
+        self._delay_lo = tk.StringVar(master=self._root, value=f"{lo:g}")
+        self._delay_hi = tk.StringVar(master=self._root, value=f"{hi:g}")
 
         def delay_changed(*_args):
+            # Either box changing reports the whole range; the controller
+            # clamps (no negatives, max never below min).
             try:
-                seconds = max(0.0, float(self._delay_var.get()))
+                lo = float(self._delay_lo.get())
+                hi = float(self._delay_hi.get())
             except ValueError:
                 return
             if on_delay:
-                on_delay(seconds)
+                on_delay(lo, hi)
 
-        delay_box = tk.Spinbox(bar, from_=0, to=120, increment=0.5, width=5,
-                               textvariable=self._delay_var,
-                               command=delay_changed)
-        delay_box.bind("<Return>", delay_changed)
-        delay_box.bind("<FocusOut>", delay_changed)
-        delay_box.pack(side="left")
+        for var in (self._delay_lo, self._delay_hi):
+            box = tk.Spinbox(bar, from_=0, to=120, increment=0.5, width=5,
+                             textvariable=var, command=delay_changed)
+            box.bind("<Return>", delay_changed)
+            box.bind("<FocusOut>", delay_changed)
+            box.pack(side="left")
+            if var is self._delay_lo:
+                tk.Label(bar, text=" max:").pack(side="left")
 
         tk.Label(bar, text="  Strength:").pack(side="left")
         labels = [label for label, _ in STRENGTHS]
@@ -160,6 +173,30 @@ class MirrorBoardWindow(MirrorView):
             fn: A no-argument callable.
         """
         self._root.after(max(0, int(seconds * 1000)), fn)
+
+    def square_position(self, name):
+        """Return a square's centre in absolute screen coordinates.
+
+        Lets the controller park the mouse back on this board after playing
+        a move in the real app. Tk reports the canvas origin in the same
+        logical coordinates ``pyautogui`` uses, so the result can be passed
+        straight to the actuator.
+
+        Args:
+            name: A square in algebraic notation, e.g. ``"e5"``.
+
+        Returns:
+            The ``(x, y)`` screen centre of the square, or None if the
+            window is not mapped yet.
+        """
+        try:
+            origin_x = self._canvas.winfo_rootx()
+            origin_y = self._canvas.winfo_rooty()
+        except Exception:
+            return None
+        row, col = board.cell_of(*board.parse_square(name), self.bottom_white)
+        return (origin_x + (col + 0.5) * self._cell,
+                origin_y + (row + 0.5) * self._cell)
 
     def _square_at(self, x, y):
         """Map a canvas click to the square's algebraic name.

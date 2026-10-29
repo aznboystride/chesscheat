@@ -19,3 +19,15 @@ class MoveActuator(ABC):
             playing_white: True if the board is oriented from white's
                 perspective, which determines where each square sits.
         """
+
+    def point_to(self, x, y):
+        """Move the mouse pointer to a screen position without clicking.
+
+        Optional: used to return the pointer to the mirror board after a
+        move has been played in the real app. The default does nothing.
+
+        Args:
+            x: Absolute screen x coordinate.
+            y: Absolute screen y coordinate.
+        """
+        return None
