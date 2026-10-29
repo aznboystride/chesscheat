@@ -78,14 +78,14 @@ or `pynput` aren't available the reader prints why and runs without it. Set
 
 `python3 -m chesscheat --mode mirror` skips screen reading entirely. You pick
 your side and click the real board's corners, and a **mirror board** opens
-next to it, drawn from the **opponent's** perspective (their pieces at the
-bottom). Play each opponent move on the mirror board — click the origin
-square, then the destination — and the program answers immediately in two
-places: on the mirror board, and in the real chess app, by dragging the
-piece over the region you selected. Illegal entries are refused with a
-message; a pawn you push to the last rank promotes to a queen. If you play
-white the program opens with white's first move; if you play black it waits
-for you to enter white's move.
+next to it, oriented exactly like the real app (your side at the bottom) so
+the two boards read identically. Copy each opponent move onto the mirror
+board — click the origin square, then the destination — and the program
+answers immediately in two places: on the mirror board, and in the real chess
+app, by dragging the piece over the region you selected. Illegal entries are
+refused with a message; a pawn you push to the last rank promotes to a queen.
+If you play white the program opens with white's first move; if you play
+black it waits for you to enter white's move.
 
 The mirror window is placed off the real board (right, left, below or above
 it, whichever fits) so it never sits under the mouse drags.

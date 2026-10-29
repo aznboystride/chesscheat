@@ -350,10 +350,10 @@ def mirror_main(engine_url=None):
     """Run mirror mode: a GUI where the user plays the opponent's moves.
 
     Asks for the user's side and the real chess app's board box, then opens
-    a mirror board oriented from the opponent's perspective. Each opponent
-    move the user enters is answered by the engine, and the reply is played
-    on the mirror board and -- by dragging the mouse over the box -- in the
-    real app.
+    a mirror board with the same orientation as the real app (the user's
+    side at the bottom). Each opponent move the user enters is answered by
+    the engine, and the reply is played on the mirror board and -- by
+    dragging the mouse over the box -- in the real app.
 
     Args:
         engine_url: Optional remote engine URL (see ``build_engine``).
@@ -361,14 +361,15 @@ def mirror_main(engine_url=None):
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
                                       FallbackSetupProvider)
     from chesscheat.assist import PyAutoGuiActuator
-    from chesscheat.mirror import MirrorGame
+    from chesscheat.mirror import MirrorGame, view_bottom_white
     from chesscheat.gui import MirrorBoardWindow
 
     print("=== Mirror Mode ===")
     _require_tk()
     print("Pick your side, then click the real board's corners. A mirror "
-          "board opens from the\nopponent's perspective: enter each opponent "
-          "move on it and the program answers\nthere and in the real app.\n")
+          "board opens, oriented\nlike the real app: copy each opponent "
+          "move onto it and the program answers there\nand in the real "
+          "app.\n")
     if sys.platform == "darwin":
         print("Note (macOS): moving the mouse needs Accessibility permission "
               "for your terminal\n(System Settings → Privacy & Security → "
@@ -390,7 +391,7 @@ def mirror_main(engine_url=None):
         mirror.submit_move(origin, destination)   # bound below
 
     view = MirrorBoardWindow(
-        on_move, bottom_white=not playing_white, avoid_box=box,
+        on_move, bottom_white=view_bottom_white(playing_white), avoid_box=box,
         on_auto=lambda enabled: mirror.set_auto(enabled),
         on_delay=lambda seconds: mirror.set_delay(seconds),
         on_strength=lambda elo: mirror.set_strength(elo))
