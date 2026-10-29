@@ -44,7 +44,7 @@ class StockfishMoveEngine(MoveEngine):
         elo: Target rating from ``set_strength``, or None for full strength.
     """
 
-    def __init__(self, path=None, think_time=0.5, eval_time=0.1):
+    def __init__(self, path=None, think_time=0.3, eval_time=0.1):
         """Locate the engine binary.
 
         Args:
@@ -66,6 +66,15 @@ class StockfishMoveEngine(MoveEngine):
         self.think_time = think_time
         self.eval_time = eval_time
         self.elo = None
+
+    def set_think_time(self, seconds):
+        """Change the search time for subsequent ``best_move`` calls.
+
+        Args:
+            seconds: Search time in seconds (anything below 0.01 counts as
+                0.01 so the engine always gets a real search).
+        """
+        self.think_time = max(0.01, float(seconds))
 
     def set_strength(self, elo):
         """Play at about ``elo`` (Stockfish's ``UCI_LimitStrength`` mode).

@@ -699,10 +699,13 @@ class RemoteMoveEngineTests(unittest.TestCase):
         fen = board.to_full_fen(board.starting_board(), True)
         engine = RemoteMoveEngine(self.url)
         self.assertEqual(engine.best_move(fen), "e2e4")
-        self.assertEqual(_BestMoveHandler.seen, [{"fen": fen, "elo": None}])
+        self.assertEqual(_BestMoveHandler.seen,
+                         [{"fen": fen, "elo": None, "think": None}])
         engine.set_strength(1800)
+        engine.set_think_time(0.25)
         engine.best_move(fen)
         self.assertEqual(_BestMoveHandler.seen[-1]["elo"], 1800)
+        self.assertEqual(_BestMoveHandler.seen[-1]["think"], 0.25)
 
     def test_evaluate_posts_the_flag_and_reads_the_score(self):
         _BestMoveHandler.reply = {"move": None, "score": {"cp": 35}}
@@ -757,6 +760,11 @@ class ParserTests(unittest.TestCase):
         self.assertEqual((args.mode, args.engine_url),
                          ("mirror", "http://host/best"))
 
+    def test_think_seconds_defaults_and_parses(self):
+        self.assertEqual(build_parser().parse_args([]).think_seconds, 0.3)
+        args = build_parser().parse_args(["--think-seconds", "1.5"])
+        self.assertEqual(args.think_seconds, 1.5)
+
     def test_unknown_mode_is_rejected(self):
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["--mode", "telepathy"])
@@ -775,6 +783,270 @@ class RequireTkTests(unittest.TestCase):
         message = str(raised.exception)
         self.assertIn("tkinter", message)
         self.assertIn("brew install python-tk@", message)
+
+
+class _Worker:
+    """A fake background worker: jobs run only when the test says so."""
+
+    def __init__(self):
+        self.jobs = []   # (fn, done)
+
+    def __call__(self, fn, done):
+        self.jobs.append((fn, done))
+
+    def finish(self):
+        """Run the oldest job and deliver its result (or error)."""
+        fn, done = self.jobs.pop(0)
+        try:
+            result = fn()
+        except Exception as exc:
+            done(None, exc)
+        else:
+            done(result, None)
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class ThinkTimeTests(unittest.TestCase):
+    """The engine's search budget: base time, extended into the delay."""
+
+    def _game(self, playing_white=True, move="e7e5", **kwargs):
+        self.engine = MockMoveEngine(move)
+        self.actuator = MockMoveActuator()
+        self.view = MockMirrorView()
+        self.scheduler = _Scheduler()
+        self.now = [100.0]
+        self.events = []
+        game = MirrorGame(playing_white, BOX, self.engine, self.actuator,
+                          self.view, schedule=self.scheduler,
+                          clock=lambda: self.now[0],
+                          on_event=lambda k, d: self.events.append((k, d)),
+                          **kwargs)
+        game.start()
+        return game
+
+    def test_base_think_time_is_applied_before_each_search(self):
+        game = self._game(move="e2e4", think_time=0.25)
+        self.assertEqual(self.engine.think_times, [0.25])   # the opener
+        game.set_think_time(0.5)
+        self.assertIn(("think", "0.5s"), self.events)
+        self.engine.move = "g1f3"
+        game.submit_move("c7", "c5")
+        self.assertEqual(self.engine.think_times[-1], 0.5)
+        game.set_think_time(0)
+        self.assertEqual(game.think_time, 0.05)              # floor
+
+    def test_delay_extends_the_search_when_enabled(self):
+        game = self._game(playing_white=False, think_time=0.3, delay=3.0,
+                          think_margin=0.1)
+        game.submit_move("e2", "e4")                 # opponent moved just now
+        self.assertAlmostEqual(self.engine.think_times[-1], 2.9)
+        self.assertIn("Thinking (2.9s)", self.view.updates[-2][2])
+        # The commit still waits out the delay from the opponent's move.
+        self.assertEqual(self.actuator.applied, [])
+        self.assertAlmostEqual(self.scheduler.pending[0][0], 3.0)
+
+    def test_elapsed_time_and_cap_shrink_the_extension(self):
+        game = self._game(playing_white=False, think_time=0.3, delay=30.0,
+                          max_think=5.0, think_margin=0.1)
+        game.submit_move("e2", "e4")
+        self.assertAlmostEqual(self.engine.think_times[-1], 5.0)   # capped
+        game.set_delay(1.0)
+        game.set_auto(False)
+        game.submit_move("e7", "e5")                 # manual: white's turn
+        game.submit_move("g1", "f3")                 # opponent; no reply yet
+        self.now[0] += 0.5                           # half the delay is gone
+        game.set_auto(True)                          # replies now
+        self.assertAlmostEqual(self.engine.think_times[-1], 0.4)   # 1-0.5-0.1
+        game.set_auto(False)
+        game.submit_move("b8", "c6")                 # manual again
+        game.submit_move("f1", "c4")                 # opponent
+        self.now[0] += 5                             # delay long gone
+        game.set_auto(True)
+        self.assertAlmostEqual(self.engine.think_times[-1], 0.3)   # base
+
+    def test_short_delay_never_shrinks_below_the_base(self):
+        game = self._game(playing_white=False, think_time=0.3, delay=0.2)
+        game.submit_move("e2", "e4")
+        self.assertAlmostEqual(self.engine.think_times[-1], 0.3)
+
+    def test_think_in_delay_off_keeps_the_fixed_time(self):
+        game = self._game(playing_white=False, think_time=0.3, delay=3.0,
+                          think_in_delay=False)
+        game.submit_move("e2", "e4")
+        self.assertEqual(self.engine.think_times[-1], 0.3)
+        game.set_think_in_delay(True)
+        self.assertIn(("think", "uses the reply delay"), self.events)
+        self.assertTrue(game.think_in_delay)
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class BackgroundThinkingTests(unittest.TestCase):
+    """With a worker, the search runs off the view and results are checked."""
+
+    def _game(self, playing_white=True, move="e7e5", **kwargs):
+        self.engine = MockMoveEngine(move)
+        self.actuator = MockMoveActuator()
+        self.view = MockMirrorView()
+        self.worker = _Worker()
+        self.scheduler = _Scheduler()
+        self.now = [100.0]
+        self.events = []
+        game = MirrorGame(playing_white, BOX, self.engine, self.actuator,
+                          self.view, schedule=self.scheduler,
+                          clock=lambda: self.now[0], worker=self.worker,
+                          on_event=lambda k, d: self.events.append((k, d)),
+                          **kwargs)
+        game.start()
+        return game
+
+    def test_reply_lands_only_when_the_worker_finishes(self):
+        game = self._game(playing_white=False)
+        game.submit_move("e2", "e4")
+        self.assertEqual(len(self.worker.jobs), 1)
+        self.assertEqual(self.engine.seen_fens, [])     # not searched yet
+        self.assertEqual(self.actuator.applied, [])
+        self.worker.finish()
+        self.assertEqual([a[0] for a in self.actuator.applied], ["e7e5"])
+        self.assertEqual(self.view.updates[-1][1], "e7e5")
+
+    def test_result_with_a_delay_is_committed_after_the_wait(self):
+        game = self._game(playing_white=False, delay=2.0)
+        game.submit_move("e2", "e4")
+        self.now[0] += 1.9                                  # the search ran
+        self.worker.finish()
+        self.assertEqual(self.actuator.applied, [])
+        self.assertAlmostEqual(self.scheduler.pending[0][0], 0.1)
+        self.now[0] += 0.1
+        self.scheduler.fire()
+        self.assertEqual([a[0] for a in self.actuator.applied], ["e7e5"])
+
+    def test_the_window_can_act_while_the_engine_thinks(self):
+        game = self._game(playing_white=False)
+        game.submit_move("e2", "e4")
+        game.undo()                      # user takes the move back meanwhile
+        self.assertEqual(game.fen.split()[0], START_FEN)
+        self.worker.finish()             # the old search completes: dropped
+        self.assertEqual(self.actuator.applied, [])
+        self.assertIn(("engine", "stale reply dropped"), self.events)
+        game.submit_move("d2", "d4")     # re-entered: a fresh search
+        self.assertEqual(len(self.worker.jobs), 1)
+        self.worker.finish()
+        self.assertEqual([a[0] for a in self.actuator.applied], ["e7e5"])
+
+    def test_new_game_during_a_search_drops_its_result(self):
+        game = self._game(playing_white=False)
+        game.submit_move("e2", "e4")
+        self.engine.move = "d2d4"
+        game.new_game(True)              # program opens: a second job
+        self.assertEqual(len(self.worker.jobs), 2)
+        self.worker.finish()             # the stale black reply
+        self.assertEqual(self.actuator.applied, [])
+        self.worker.finish()             # the opener
+        self.assertEqual([a[0] for a in self.actuator.applied], ["d2d4"])
+
+    def test_pausing_before_the_result_arrives_cancels_it(self):
+        game = self._game(playing_white=False)
+        game.submit_move("e2", "e4")
+        game.set_auto(False)
+        self.worker.finish()
+        self.assertEqual(self.actuator.applied, [])
+        self.assertIn("paused", self.view.updates[-1][2])
+
+    def test_a_second_request_for_the_same_position_is_ignored(self):
+        game = self._game(playing_white=False)
+        game.submit_move("e2", "e4")
+        game.set_auto(False)
+        game.set_auto(True)              # mid-turn: would re-ask the engine
+        self.assertEqual(len(self.worker.jobs), 1)
+        self.worker.finish()
+        self.assertEqual([a[0] for a in self.actuator.applied], ["e7e5"])
+        self.assertEqual(len(self.engine.seen_fens), 1)
+
+    def test_engine_error_in_the_worker_becomes_a_status(self):
+        class Failing(MockMoveEngine):
+            def best_move(self, fen):
+                raise RuntimeError("engine died")
+
+        worker = _Worker()
+        view = MockMirrorView()
+        events = []
+        game = MirrorGame(False, BOX, Failing(), MockMoveActuator(), view,
+                          worker=worker,
+                          on_event=lambda k, d: events.append((k, d)))
+        game.start()
+        game.submit_move("e2", "e4")
+        worker.finish()
+        self.assertIn(("engine", "failed: engine died"), events)
+        self.assertIn("Engine error: engine died", view.updates[-1][2])
+        self.assertTrue(game.opponent_to_move is False)
+
+
+class BackgroundRunnerTests(unittest.TestCase):
+    """Real threads, a fake event loop: results arrive via ``after``."""
+
+    def _loop(self):
+        scheduled = []
+        return scheduled, lambda ms, fn: scheduled.append((ms, fn))
+
+    def _pump(self, scheduled, until, tries=200):
+        """Run scheduled polls until ``until()`` holds (or give up)."""
+        import time
+
+        for _ in range(tries):
+            if until():
+                return
+            time.sleep(0.005)              # give the thread a turn
+            if scheduled:
+                _ms, fn = scheduled.pop(0)
+                fn()
+        self.fail("background result never delivered")
+
+    def test_result_is_delivered_on_the_loop(self):
+        from chesscheat.gui import BackgroundRunner
+
+        scheduled, after = self._loop()
+        runner = BackgroundRunner(after, poll_ms=5)
+        delivered = []
+        runner.run(lambda: 6 * 7, lambda r, e: delivered.append((r, e)))
+        self.assertEqual(scheduled[0][0], 5)       # polling armed at once
+        self._pump(scheduled, lambda: delivered)
+        self.assertEqual(delivered, [(42, None)])
+        self.assertEqual(runner.pending, 0)
+        self.assertEqual(scheduled, [])            # polling stopped
+
+    def test_exception_is_delivered_as_error(self):
+        from chesscheat.gui import BackgroundRunner
+
+        def boom():
+            raise ValueError("bad")
+
+        scheduled, after = self._loop()
+        runner = BackgroundRunner(after, poll_ms=5)
+        delivered = []
+        runner.run(boom, lambda r, e: delivered.append((r, e)))
+        self._pump(scheduled, lambda: delivered)
+        result, error = delivered[0]
+        self.assertIsNone(result)
+        self.assertIsInstance(error, ValueError)
+
+    def test_concurrent_jobs_share_one_poll(self):
+        import threading
+        from chesscheat.gui import BackgroundRunner
+
+        gate = threading.Event()
+        scheduled, after = self._loop()
+        runner = BackgroundRunner(after, poll_ms=5)
+        delivered = []
+        runner.run(lambda: gate.wait(5) and "slow",
+                   lambda r, e: delivered.append(r))
+        runner.run(lambda: "fast", lambda r, e: delivered.append(r))
+        self.assertEqual(len(scheduled), 1)        # one poller for both
+        self._pump(scheduled, lambda: "fast" in delivered)
+        self.assertEqual(runner.pending, 1)
+        self.assertTrue(scheduled)                 # still polling for slow
+        gate.set()
+        self._pump(scheduled, lambda: "slow" in delivered)
+        self.assertEqual(runner.pending, 0)
 
 
 class EvaluationMappingTests(unittest.TestCase):

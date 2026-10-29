@@ -7,6 +7,22 @@ from chesscheat import board
 from chesscheat.mirror.evaluation import score_label, white_share
 
 
+def _run_now(fn, done):
+    """The default worker: run ``fn`` here and report to ``done`` at once.
+
+    Args:
+        fn: No-argument callable to run.
+        done: ``done(result, error)`` callback; ``error`` is the exception
+            ``fn`` raised, else None.
+    """
+    try:
+        result = fn()
+    except Exception as exc:
+        done(None, exc)
+        return
+    done(result, None)
+
+
 def position_map(game):
     """Convert a python-chess board to the project's board-map form.
 
@@ -51,6 +67,17 @@ class MirrorGame:
       (``schedule``), and is cancelled if the position changes or auto is
       paused meanwhile.
     - strength -- forwarded to ``engine.set_strength`` for the next reply.
+    - ``think_time`` -- the engine's search budget per reply, and
+      ``think_in_delay``: when on, a reply that will wait anyway thinks for
+      as long as it would wait (capped by ``max_think``), so the delay is
+      spent searching rather than idling and the move is still ready on
+      time.
+
+    The engine is consulted through an injectable ``worker(fn, done)`` so a
+    GUI can run the search on a background thread and keep its window
+    responsive (``done(result, error)`` must be called back on the GUI
+    thread); the default runs it synchronously. A result arriving after the
+    position has changed (undo, new game, another opponent move) is dropped.
 
     After the program's move has been played in the real app, the mouse
     pointer is returned to the mirror board, onto the square the opponent's
@@ -81,11 +108,18 @@ class MirrorGame:
         delay_range: ``(min, max)`` seconds the per-reply delay is drawn from.
         delay: The delay in force for the current/next reply (read-only).
         elo: The strength last requested from the engine, or None.
+        think_time: Base engine search time per reply, in seconds.
+        think_in_delay: Whether a waiting reply may think for the wait.
+        max_think: Cap on the search time when thinking in the delay.
+        think_margin: Seconds of the delay kept free of searching, so the
+            move is ready (engine start-up, actuation) when the delay ends.
     """
 
     def __init__(self, playing_white, box, engine, actuator, view,
                  on_event=lambda kind, detail: None, auto=True, delay=0.0,
-                 clock=time.time, schedule=None, rng=random.uniform):
+                 clock=time.time, schedule=None, rng=random.uniform,
+                 think_time=0.3, think_in_delay=True, max_think=10.0,
+                 think_margin=0.1, worker=None):
         """Initialise a fresh game from the starting position.
 
         Args:
@@ -106,6 +140,15 @@ class MirrorGame:
                 not for a GUI.
             rng: ``rng(lo, hi)`` returning a float in ``[lo, hi]``, used to
                 draw each reply's delay; defaults to ``random.uniform``.
+            think_time: Base engine search seconds per reply (applied to
+                the engine through ``set_think_time`` before each search).
+            think_in_delay: Initial setting for thinking during the delay.
+            max_think: Cap on the search seconds when thinking in the delay.
+            think_margin: Seconds of the delay left unused by the search.
+            worker: ``worker(fn, done)`` running ``fn()`` and then calling
+                ``done(result, error)`` -- on a background thread with the
+                callback marshalled to the GUI thread (the view's
+                ``run_in_background``), or None to run synchronously.
         """
         import chess
 
@@ -121,6 +164,12 @@ class MirrorGame:
         self._clock = clock
         self._schedule = schedule or (lambda seconds, fn: fn())
         self._rng = rng
+        self.think_time = max(0.05, float(think_time))
+        self.think_in_delay = bool(think_in_delay)
+        self.max_think = float(max_think)
+        self.think_margin = float(think_margin)
+        self._worker = worker or _run_now
+        self._thinking = None   # (fen, epoch) a search is under way for
         self._game = chess.Board()
         self._opponent_time = clock()
         self._last_opponent_to = None
@@ -274,6 +323,41 @@ class MirrorGame:
         lo, hi = self.delay_range
         self._on_event("delay", f"{lo:g}s" if hi <= lo
                        else f"{lo:g}s to {hi:g}s (random)")
+
+    def set_think_time(self, seconds):
+        """Set the engine's base search time per reply.
+
+        Args:
+            seconds: Search seconds (anything below 0.05 counts as 0.05).
+        """
+        self.think_time = max(0.05, float(seconds))
+        self._on_event("think", f"{self.think_time:g}s")
+
+    def set_think_in_delay(self, enabled):
+        """Let a reply that will wait anyway spend the wait thinking.
+
+        Args:
+            enabled: True to extend the search to the reply delay (capped
+                by ``max_think``); False for the fixed ``think_time``.
+        """
+        self.think_in_delay = bool(enabled)
+        self._on_event("think", "uses the reply delay" if self.think_in_delay
+                       else "fixed")
+
+    def _think_budget(self):
+        """Seconds the next search may take.
+
+        Returns:
+            ``think_time``, raised to whatever is left of the current delay
+            (less ``think_margin``, at most ``max_think``) when
+            ``think_in_delay`` is on.
+        """
+        budget = self.think_time
+        if self.think_in_delay:
+            elapsed = self._clock() - self._opponent_time
+            available = self._current_delay - elapsed - self.think_margin
+            budget = max(budget, min(self.max_think, available))
+        return budget
 
     def set_strength(self, elo):
         """Change the engine's playing strength for subsequent replies.
@@ -445,32 +529,53 @@ class MirrorGame:
     def _reply(self):
         """Ask the engine for the program's move and play it after the delay.
 
-        The engine thinks immediately; the move is committed once ``delay``
-        seconds have passed since the opponent moved, via ``schedule`` so the
-        view stays responsive. A deferred commit is dropped if the position
-        changed or auto-play was paused in the meantime.
+        The engine starts thinking immediately, through the ``worker`` so
+        the view stays responsive, for ``_think_budget`` seconds; the move
+        is committed once ``delay`` seconds have passed since the opponent
+        moved, via ``schedule``. A result for a position that has since
+        changed is dropped, as is a deferred commit if the position changed
+        or auto-play was paused in the meantime. A second request for the
+        same position while a search is under way is ignored.
 
         Returns:
-            The UCI move if it was played immediately, else None.
+            The UCI move if it was played immediately (synchronous worker,
+            no delay left), else None.
         """
         import chess
 
-        self._refresh("Thinking...")
-        try:
-            uci = self._engine.best_move(self._game.fen())
-        except Exception as exc:  # engine problems must not kill the GUI
-            self._on_event("engine", f"failed: {exc}")
-            self._refresh(f"Engine error: {exc}")
+        fen, epoch = self._game.fen(), self._epoch
+        if self._thinking == (fen, epoch):
             return None
-        if not uci:
-            self._refresh("The engine has no move (game over?).")
-            return None
-        if chess.Move.from_uci(uci) not in self._game.legal_moves:
-            self._on_event("engine", f"illegal reply {uci}")
-            self._refresh(f"Engine proposed an illegal move: {uci}")
-            return None
+        budget = self._think_budget()
+        self._thinking = (fen, epoch)
+        self._refresh(f"Thinking ({budget:.1f}s)...")
+        played = []
 
-        return self._commit_after_delay(uci, self._game.fen(), self._epoch)
+        def think():
+            self._engine.set_think_time(budget)
+            return self._engine.best_move(fen)
+
+        def done(uci, error):
+            if self._thinking == (fen, epoch):
+                self._thinking = None
+            if epoch != self._epoch or self._game.fen() != fen:
+                self._on_event("engine", "stale reply dropped")
+                return
+            if error is not None:   # engine problems must not kill the GUI
+                self._on_event("engine", f"failed: {error}")
+                self._refresh(f"Engine error: {error}")
+                return
+            if not uci:
+                self._refresh("The engine has no move (game over?).")
+                return
+            if chess.Move.from_uci(uci) not in self._game.legal_moves:
+                self._on_event("engine", f"illegal reply {uci}")
+                self._refresh(f"Engine proposed an illegal move: {uci}")
+                return
+            played.append(self._commit_after_delay(uci, fen, epoch))
+
+        self._worker(think, done)
+        return played[0] if played else None
 
     def _commit_after_delay(self, uci, fen, epoch):
         """Play ``uci`` once the delay has elapsed, if still applicable.

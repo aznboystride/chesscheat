@@ -185,13 +185,15 @@ SSIM_THRESHOLD = 0.6
 ASSIST_KEY = "a"
 
 
-def build_engine(engine_url=None):
+def build_engine(engine_url=None, think_time=None):
     """Pick the decision maker behind the ``MoveEngine`` interface.
 
     Args:
         engine_url: URL of a remote best-move service; falls back to the
             ``CHESSCHEAT_ENGINE_URL`` environment variable. When neither is
             set, a local Stockfish binary is used.
+        think_time: Optional search seconds per move, applied through
+            ``set_think_time``; None keeps the engine's default.
 
     Returns:
         A ``RemoteMoveEngine`` for a URL, else a ``StockfishMoveEngine``.
@@ -203,10 +205,13 @@ def build_engine(engine_url=None):
     from chesscheat.assist import StockfishMoveEngine, RemoteMoveEngine
 
     url = engine_url or os.environ.get("CHESSCHEAT_ENGINE_URL")
-    return RemoteMoveEngine(url) if url else StockfishMoveEngine()
+    engine = RemoteMoveEngine(url) if url else StockfishMoveEngine()
+    if think_time is not None:
+        engine.set_think_time(think_time)
+    return engine
 
 
-def _build_assist(on_event, engine_url=None):
+def _build_assist(on_event, engine_url=None, think_time=None):
     """Try to wire the move-assist (engine + mouse + keybind).
 
     The assist needs a decision maker (local Stockfish, or a remote service
@@ -217,6 +222,7 @@ def _build_assist(on_event, engine_url=None):
     Args:
         on_event: The console activity callback, used to log assist actions.
         engine_url: Optional remote engine URL (see ``build_engine``).
+        think_time: Optional engine search seconds per move.
 
     Returns:
         A ``(trigger, on_trigger)`` pair for ``run``; ``trigger`` is None
@@ -232,7 +238,7 @@ def _build_assist(on_event, engine_url=None):
     try:
         import pyautogui  # noqa: F401  -- probe availability early
         import pynput  # noqa: F401
-        engine = build_engine(engine_url)
+        engine = build_engine(engine_url, think_time)
         actuator = PyAutoGuiActuator()
         trigger = KeyTrigger(ASSIST_KEY)
     except (ImportError, FileNotFoundError) as exc:
@@ -264,11 +270,12 @@ def _build_assist(on_event, engine_url=None):
     return trigger, on_trigger
 
 
-def reader_main(engine_url=None):
+def reader_main(engine_url=None, think_time=None):
     """Wire the real implementations and run the live reader.
 
     Args:
         engine_url: Optional remote engine URL for the move assist.
+        think_time: Optional engine search seconds per assisted move.
     """
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
                                       FallbackSetupProvider, ScreenFrameSource)
@@ -317,7 +324,7 @@ def reader_main(engine_url=None):
         seen["unknown"] = unknown
         console_frame(image)
 
-    trigger, on_trigger = _build_assist(on_event, engine_url)
+    trigger, on_trigger = _build_assist(on_event, engine_url, think_time)
 
     run(setup, ScreenFrameSource, recognizer,
         on_board=on_board, on_frame=on_frame,
@@ -346,7 +353,7 @@ def _require_tk():
             f"python-tk@{sys.version_info.major}.{sys.version_info.minor}")
 
 
-def mirror_main(engine_url=None):
+def mirror_main(engine_url=None, think_time=0.3):
     """Run mirror mode: a GUI where the user plays the opponent's moves.
 
     Asks for the user's side and the real chess app's board box, then opens
@@ -359,6 +366,8 @@ def mirror_main(engine_url=None):
 
     Args:
         engine_url: Optional remote engine URL (see ``build_engine``).
+        think_time: Initial engine search seconds per reply (adjustable in
+            the window).
     """
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
                                       FallbackSetupProvider)
@@ -402,9 +411,14 @@ def mirror_main(engine_url=None):
         on_strength=lambda elo: mirror.set_strength(elo),
         on_undo=lambda: mirror.undo(),
         on_watch=lambda enabled: watcher.set_enabled(enabled),
-        on_new_game=lambda white: mirror.new_game(white))
+        on_new_game=lambda white: mirror.new_game(white),
+        on_think=lambda seconds: mirror.set_think_time(seconds),
+        on_think_in_delay=lambda enabled: mirror.set_think_in_delay(enabled),
+        think=think_time)
     mirror = MirrorGame(playing_white, box, engine, PyAutoGuiActuator(),
-                        view, on_event=log, schedule=view.schedule)
+                        view, on_event=log, schedule=view.schedule,
+                        think_time=think_time,
+                        worker=view.run_in_background)
     watcher = OpponentWatcher(mirror, ScreenFrameSource(box).grab,
                               view.schedule, on_event=log)
     log("mode", f"you play {'white' if playing_white else 'black'}; "
@@ -438,6 +452,11 @@ def build_parser():
         "--engine-url", default=None,
         help="URL of a remote best-move service (POST {fen} -> {move}); "
              "defaults to CHESSCHEAT_ENGINE_URL, else a local Stockfish.")
+    parser.add_argument(
+        "--think-seconds", type=float, default=0.3,
+        help="engine search time per move in seconds (default 0.3); in "
+             "mirror mode adjustable in the window, and extended to the "
+             "reply delay while 'Think in delay' is on.")
     return parser
 
 
@@ -449,9 +468,9 @@ def main(argv=None):
     """
     args = build_parser().parse_args(argv)
     if args.mode == "mirror":
-        mirror_main(args.engine_url)
+        mirror_main(args.engine_url, args.think_seconds)
     else:
-        reader_main(args.engine_url)
+        reader_main(args.engine_url, args.think_seconds)
 
 
 if __name__ == "__main__":

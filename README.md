@@ -129,6 +129,22 @@ A control bar under the board adjusts the behaviour at any time, mid-game:
   local engine this sets Stockfish's `UCI_LimitStrength`/`UCI_Elo` (clamped
   to the engine's supported range); the remote engine receives it as `elo`
   in each request. Takes effect from the next reply.
+- **Think (s)** — how long the engine searches per reply (default 0.3 s;
+  `--think-seconds` sets the starting value). Stockfish at a tenth of a
+  second is already far beyond human strength, so lower it freely for
+  snappier replies. The remote engine receives it as `think` in each
+  request.
+- **Think in delay** (toggle, on by default) — when a reply is going to
+  wait for the delay anyway, let the engine use the wait: it searches for
+  whatever is left of the delay (less a small margin, at most 10 s) instead
+  of the fixed think time, so the wait buys a stronger move and the reply
+  is still ready on time. With it off, the engine always searches for the
+  fixed think time and idles for the rest.
+
+The engine searches on a background thread, so the window stays live
+while it thinks: you can still pause auto-play, undo or start a new game
+mid-search, and a result for a position that has since changed is thrown
+away.
 - **Undo** — takes back the last opponent move *and* whatever followed it
   (the engine's reply, or your own manual move), putting the board back on
   the opponent's turn so you can enter the correct move. A reply still
@@ -169,9 +185,11 @@ take any implementation:
 | `StockfishMoveEngine` (default) | locally, the binary `setup.sh` installed | nothing to do |
 | `RemoteMoveEngine` | on another machine, behind an HTTP endpoint | `--engine-url URL` or `CHESSCHEAT_ENGINE_URL` |
 
-The remote protocol is minimal JSON: `POST` `{"fen": "<full FEN>", "elo": N}`
-(`elo` is the requested strength, `null` for full; a service may ignore it)
-and reply `{"move": "e2e4"}` (or `{"move": null}` for no move). For the
+The remote protocol is minimal JSON: `POST` `{"fen": "<full FEN>", "elo": N,
+"think": S}` (`elo` is the requested strength, `null` for full; `think` the
+requested search time in seconds, `null` for the service's default; a service
+may ignore both) and reply `{"move": "e2e4"}` (or `{"move": null}` for no
+move). For the
 evaluation bar the client also `POST`s `{"fen": "<full FEN>", "evaluate":
 true}` after every move and reads an optional `"score"` from the reply —
 `{"cp": 35}` (centipawns) or `{"mate": 3}` (moves to mate, negative when
@@ -180,8 +198,9 @@ evaluate can answer such requests with `{"move": null}` straight away and
 the bar stays blank. Any service that speaks this works — a Stockfish on a
 beefier box, a cloud function, a different engine entirely. Implement
 `MoveEngine` yourself for anything else; override its optional
-`set_strength(elo)` if your engine can vary strength and `evaluate(fen)` if
-it can score a position.
+`set_strength(elo)` if your engine can vary strength, `set_think_time(s)`
+if it can vary its search time, and `evaluate(fen)` if it can score a
+position.
 
 ## Requirements
 

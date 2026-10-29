@@ -99,7 +99,7 @@ chesscheat/
                     MoveActuator,MoveTrigger,MirrorView}, synthetic_image
   capture/          screenshot
   gui/              dialogs, overlays (annotations/draw), LivePreview,
-                    MirrorBoardWindow
+                    MirrorBoardWindow, BackgroundRunner
 tests/              test_board, test_recognition, test_legal_move_filter, ...
 ```
 
@@ -118,8 +118,10 @@ tests/              test_board, test_recognition, test_legal_move_filter, ...
 - `MoveEngine` — `best_move(fen)` returns the best move (UCI) for a full FEN,
   or None; plus **concrete, optional** `set_strength(elo)` (None = full
   strength; the base is a no-op so engines that can't vary strength ignore
-  it) and `evaluate(fen)` → `{"cp": n}` / `{"mate": n}` from **white's**
-  perspective, or None (the base returns None: no evaluation bar). **This is the decision-maker interface**: `StockfishMoveEngine`
+  it), `set_think_time(seconds)` (search budget for subsequent calls; the
+  base ignores it) and `evaluate(fen)` → `{"cp": n}` / `{"mate": n}` from
+  **white's** perspective, or None (the base returns None: no evaluation
+  bar). **This is the decision-maker interface**: `StockfishMoveEngine`
   (local binary) and `RemoteMoveEngine` (HTTP service) implement it, and
   `app.build_engine(engine_url)` picks one (`--engine-url` /
   `CHESSCHEAT_ENGINE_URL` → remote, else local). `MoveActuator` —
@@ -225,7 +227,8 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
 - `StockfishMoveEngine` — locates a binary (explicit path / `STOCKFISH_PATH` /
   `shutil.which("stockfish")`) at construction; `best_move` opens a UCI engine
   per call via **python-chess** (`chess.engine`, lazy), returns None for an
-  invalid/finished position. `set_strength(elo)` is applied to each fresh
+  invalid/finished position; `think_time` (default **0.3 s**, settable via
+  `set_think_time`, floor 0.01) is the `Limit(time=…)`. `set_strength(elo)` is applied to each fresh
   process via the pure `limit_strength_options(elo, min, max)` →
   `{UCI_LimitStrength, UCI_Elo}` clamped to the engine's advertised range
   (skipped if the engine has no `UCI_Elo` option). The binary is normally supplied by
@@ -246,7 +249,9 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   "elo": …}`` to an HTTP endpoint (``elo`` from `set_strength`, null = full),
   reads ``{"move": "e2e4"}`` (``null`` → None). `evaluate(fen)` posts
   ``{"fen": …, "evaluate": true}`` and returns the reply's ``score`` dict
-  (``{"cp": n}`` / ``{"mate": n}``) or None when absent/not a dict.
+  (``{"cp": n}`` / ``{"mate": n}``) or None when absent/not a dict;
+  `set_think_time` is forwarded as ``"think"`` in each best-move request
+  (null = service default).
   Stdlib ``urllib`` only (shared `_post`); raises ``RuntimeError`` on an
   unreachable service, non-2xx status, malformed JSON or (for `best_move`)
   a reply without ``move``. Tested against a real local ``http.server`` in
@@ -314,12 +319,26 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   from `delay_range` via an injectable `rng(lo, hi)` (`random.uniform`;
   equal ends → fixed, no draw) -- redrawn on every opponent move and on a
   range change, so jitter is per reply and a pending wait follows the new
-  range. `_reply` has the engine think immediately, validates the reply
-  is legal, then `_commit_after_delay` either plays now or defers itself via
-  the injectable `schedule(seconds, fn)` (Tk `after` in the GUI; immediate
-  by default) -- so the view never blocks. A deferred commit is dropped if
-  the position changed or auto was paused, and re-defers if the delay was
-  raised meanwhile. `_play_program_move` pushes → `actuator.apply(uci, box,
+  range. `_reply` has the engine think immediately **through an injectable
+  `worker(fn, done)`** (the view's `run_in_background` → a thread, with
+  `done(result, error)` marshalled back onto the Tk loop; `_run_now`
+  synchronous by default) so the window never freezes during a search: it
+  captures `(fen, epoch)`, computes the budget, sets `_thinking` (a second
+  request for the same position -- e.g. `set_auto(True)` mid-search -- is
+  ignored), and `done` drops a stale result (epoch/fen changed: undo, new
+  game, another opponent move), turns an exception into an `("engine",
+  "failed: …")` event + status, rejects None/illegal replies, else calls
+  `_commit_after_delay`, which either plays now or defers itself via the
+  injectable `schedule(seconds, fn)` (Tk `after` in the GUI; immediate by
+  default). A deferred commit is dropped if the position changed or auto
+  was paused, and re-defers if the delay was raised meanwhile. The
+  **search budget** (`_think_budget`) is `think_time` (base, default 0.3 s,
+  floor 0.05, `set_think_time`), raised when `think_in_delay` is on
+  (`set_think_in_delay`, default on) to `min(max_think=10, current_delay -
+  elapsed - think_margin=0.1)` -- the wait is spent searching and the move
+  is still ready when the delay ends; it is applied with
+  `engine.set_think_time(budget)` inside the worker right before
+  `best_move`. `_play_program_move` pushes → `actuator.apply(uci, box,
   playing_white)` (the **real app's** orientation = the user's side), then
   `_return_pointer()`: `view.square_position(last opponent destination)`
   → `actuator.point_to(x, y)` parks the mouse back on the mirror board
@@ -362,7 +381,8 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   (this requirement flipped once — it used to be the opponent's view — and
   is pinned by a test).
 - `gui/mirror_board.py` `MirrorBoardWindow(on_move, bottom_white, avoid_box,
-  on_auto, on_delay, on_strength)` is the Tk `MirrorView`: drawn with
+  on_auto, on_delay, on_strength, on_undo, on_watch, on_new_game, on_think,
+  on_think_in_delay, …)` is the Tk `MirrorView`: drawn with
   `bottom_white = view_bottom_white(playing_white)`, unicode
   piece glyphs, click-origin then click-destination → `on_move`,
   last-move/selection highlights, status line, and a control bar (Auto-play
@@ -380,9 +400,15 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   stores `(share, label)` and `_draw_evaluation` fills white's share from
   white's side — bottom when `bottom_white` — with the label rotated along
   the bar at the leading side's end); `set_orientation(bottom_white)`
-  flips the board and bar for a new game as the other colour; `run()` is
-  the Tk mainloop (this mode has no reader loop; the watcher polls via
-  `schedule`).
+  flips the board and bar for a new game as the other colour; a second
+  control row holds Strength, a **Think (s)** spinbox → `on_think(seconds)`
+  and a **Think in delay** checkbox → `on_think_in_delay(enabled)`;
+  `run_in_background(fn, done)` delegates to `gui/background_runner.py`
+  `BackgroundRunner(after)` -- a daemon thread per job, outcomes queued
+  and drained on the Tk loop by polling `after(25, …)` only while jobs are
+  pending, `done(result, error)` always on the loop thread (tested with
+  real threads and a fake `after`); `run()` is the Tk mainloop (this mode
+  has no reader loop; the watcher polls via `schedule`).
 - **Watching the real app** (`OpponentWatcher`, `move_inference.py`,
   `recognition/square_scan.py`) — infers the opponent's move from the app's
   **last-move highlight** instead of the user entering it. No piece
@@ -424,10 +450,13 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   has no text fallback for its board, so a missing `tkinter` exits at once
   with a `brew install python-tk@X.Y` hint instead of prompting and then
   crashing), then side + box via the setup provider,
-  `build_engine`, `PyAutoGuiActuator`, the window, an `OpponentWatcher`
-  over `ScreenFrameSource(box).grab` and `view.schedule` (started after
+  `build_engine(engine_url, think_time)` (applies `set_think_time` when
+  given), `PyAutoGuiActuator`, the window, `MirrorGame(…, think_time,
+  worker=view.run_in_background)`, an `OpponentWatcher` over
+  `ScreenFrameSource(box).grab` and `view.schedule` (started after
   `mirror.start()`), timestamped console events; `app.main(argv)`
-  dispatches `--mode reader|mirror` via `build_parser()`.
+  dispatches `--mode reader|mirror` via `build_parser()` and passes
+  `--think-seconds` (default 0.3) to both modes.
 
 ### Mocks (`chesscheat/mocks/`) — dependency-free, test the whole pipeline
 
@@ -536,10 +565,20 @@ time are recognised exactly.
   evaluation → level blank bar; evaluate exception logged; game over shows
   the result without asking the engine); new game (switch to black
   reorients and waits, as white opens on the same box, a reply pending
-  from the old game cannot land). `RemoteMoveEngine`
-  against a real local `http.server` (protocol, null move, 5xx, malformed,
-  unreachable, `evaluate` posts the flag and reads `score` / None without
-  one / raises on 5xx). `build_parser` modes/engine-url.
+  from the old game cannot land); think time (base applied before each
+  search, `set_think_time` floor and event, the delay extends the search
+  when enabled, elapsed time and `max_think` shrink it, a short delay never
+  shrinks below the base, off keeps the fixed time); background thinking
+  with a fake `_Worker` (reply lands only when the job finishes, delayed
+  commit after the wait, undo/new game during a search drop the stale
+  result, pausing cancels it, a second request for the same position is
+  ignored, an engine exception becomes a status); `BackgroundRunner` with
+  real threads and a fake `after` (result and exception delivered on the
+  loop, polling stops when idle, concurrent jobs share one poller).
+  `RemoteMoveEngine` against a real local `http.server` (protocol incl.
+  `think`, null move, 5xx, malformed, unreachable, `evaluate` posts the
+  flag and reads `score` / None without one / raises on 5xx).
+  `build_parser` modes/engine-url/think-seconds.
 - `test_move_inference.py` — dep-free: `highlighted_squares` (clean board,
   both squares of a move, orientation, small noise ignored), `piece_colours`
   (classified from the model's references, sides swap for black, a moved
