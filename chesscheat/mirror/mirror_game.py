@@ -172,6 +172,25 @@ class MirrorGame:
         return self._game.turn == (chess.WHITE if self.playing_white
                                    else chess.BLACK)
 
+    @property
+    def opponent_to_move(self):
+        """True while the game is on and it is the opponent's turn."""
+        return not self._game.is_game_over() and not self._program_to_move()
+
+    def is_legal(self, from_name, to_name):
+        """Whether two squares form a legal move for the side to move.
+
+        A pawn reaching the last rank counts (as a queen promotion).
+
+        Args:
+            from_name: Origin square, e.g. ``"e7"``.
+            to_name: Destination square, e.g. ``"e5"``.
+
+        Returns:
+            True if the move is legal in the current position.
+        """
+        return self._legal(from_name, to_name) is not None
+
     def _colour(self, program_side):
         """Name a side's colour for status messages.
 

@@ -26,10 +26,12 @@ class MirrorBoardWindow(MirrorView):
     status line says whose turn it is.
 
     A control bar under the board exposes the runtime settings -- an
-    **Auto-play** toggle, a **reply delay range** (min/max seconds; equal
-    for a fixed delay, apart for random jitter), the engine **strength**,
-    and an **Undo** button that takes back the last opponent move and the
-    reply to it -- each reported through its own callback.
+    **Auto-play** toggle, a **Watch app** toggle (read the opponent's moves
+    off the real app's last-move highlight instead of entering them), a
+    **reply delay range** (min/max seconds; equal for a fixed delay, apart
+    for random jitter), the engine **strength**, and an **Undo** button
+    that takes back the last opponent move and the reply to it -- each
+    reported through its own callback.
     ``square_position`` tells the controller where a square is on screen so
     the pointer can be returned here after a move in the real app. ``schedule`` defers work on the Tk event loop so a delayed
     reply never freezes the window.
@@ -43,8 +45,8 @@ class MirrorBoardWindow(MirrorView):
 
     def __init__(self, on_move, bottom_white, avoid_box=None, cell=64,
                  title="chesscheat mirror board", on_auto=None, on_delay=None,
-                 on_strength=None, on_undo=None, auto=True, delay=0.0,
-                 elo=None):
+                 on_strength=None, on_undo=None, on_watch=None, auto=True,
+                 delay=0.0, elo=None, watch=True):
         """Create the window.
 
         Args:
@@ -65,10 +67,13 @@ class MirrorBoardWindow(MirrorView):
             on_strength: Callback ``(elo_or_None)`` when the strength changes.
             on_undo: Callback ``()`` when the Undo button is pressed (take
                 back the last opponent move and the reply to it).
+            on_watch: Callback ``(enabled)`` when the Watch-app toggle
+                changes.
             auto: Initial state of the auto-play toggle.
             delay: Initial reply delay shown: seconds, or a ``(min, max)``
                 pair.
             elo: Initial strength shown (None = full strength).
+            watch: Initial state of the Watch-app toggle.
         """
         import tkinter as tk
 
@@ -98,11 +103,11 @@ class MirrorBoardWindow(MirrorView):
                                 font=("Helvetica", 12), padx=8, pady=6)
         self._status.pack(fill="x")
         self._build_controls(tk, on_auto, on_delay, on_strength, on_undo,
-                             auto, delay, elo)
+                             on_watch, auto, delay, elo, watch)
 
     def _build_controls(self, tk, on_auto, on_delay, on_strength, on_undo,
-                        auto, delay, elo):
-        """Lay out the auto-play, delay, strength and undo controls.
+                        on_watch, auto, delay, elo, watch):
+        """Lay out the auto-play, watch, delay, strength and undo controls.
 
         Args:
             tk: The imported ``tkinter`` module.
@@ -110,9 +115,11 @@ class MirrorBoardWindow(MirrorView):
             on_delay: Delay change callback (or None).
             on_strength: Strength change callback (or None).
             on_undo: Undo button callback (or None).
-            auto: Initial toggle state.
+            on_watch: Watch-app toggle callback (or None).
+            auto: Initial auto-play toggle state.
             delay: Initial delay in seconds.
             elo: Initial strength (None = full).
+            watch: Initial Watch-app toggle state.
         """
         bar = tk.Frame(self._root, padx=8, pady=4)
         bar.pack(fill="x")
@@ -121,6 +128,12 @@ class MirrorBoardWindow(MirrorView):
         tk.Checkbutton(
             bar, text="Auto-play", variable=self._auto_var,
             command=lambda: on_auto and on_auto(self._auto_var.get()),
+        ).pack(side="left")
+
+        self._watch_var = tk.BooleanVar(master=self._root, value=watch)
+        tk.Checkbutton(
+            bar, text="Watch app", variable=self._watch_var,
+            command=lambda: on_watch and on_watch(self._watch_var.get()),
         ).pack(side="left")
 
         tk.Label(bar, text="  Reply delay (s) min:").pack(side="left")

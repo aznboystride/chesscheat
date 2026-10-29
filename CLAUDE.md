@@ -86,11 +86,14 @@ chesscheat/
   __main__.py       `python3 -m chesscheat` entry point
   interfaces/       SetupProvider, FrameSource, ImageBackend, BoardRecognizer,
                     MoveEngine, MoveActuator, MoveTrigger, MirrorView
-  recognition/      TemplateBoardRecognizer, NumpyImageBackend, LegalMoveFilter
+  recognition/      TemplateBoardRecognizer, NumpyImageBackend, LegalMoveFilter,
+                    square_scan (scan_squares)
   providers/        Gui/Prompt/Fallback SetupProvider, ScreenFrameSource
   assist/           StockfishMoveEngine, RemoteMoveEngine, PyAutoGuiActuator,
                     KeyTrigger, assist_move (move_pixels)
-  mirror/           MirrorGame (position_map), gui_placement
+  mirror/           MirrorGame (position_map), gui_placement, OpponentWatcher,
+                    move_inference (highlighted_squares, piece_colours,
+                    infer_opponent_move)
   mocks/            Mock{SetupProvider,FrameSource,ImageBackend,MoveEngine,
                     MoveActuator,MoveTrigger,MirrorView}, synthetic_image
   capture/          screenshot
@@ -337,15 +340,53 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   Tk `after` for the controller's non-blocking delay; `square_position(name)`
   maps a square to absolute screen coordinates (canvas `winfo_rootx/y` +
   cell centre, same logical pixels `pyautogui` uses) for the pointer
-  return; `run()` is the Tk
-  mainloop (this mode has no capture loop).
+  return; a **Watch app** checkbox → `on_watch(enabled)`; `run()` is the Tk
+  mainloop (this mode has no reader loop; the watcher polls via `schedule`).
+- **Watching the real app** (`OpponentWatcher`, `move_inference.py`,
+  `recognition/square_scan.py`) — infers the opponent's move from the app's
+  **last-move highlight** instead of the user entering it. No piece
+  recognition: `scan_squares(image)` (numpy, lazy) summarises each screen
+  cell as `(background, piece_fraction, piece_brightness)` — background =
+  median of the margin-trimmed patch's four **corner blocks** (20 % of the
+  side; a border ring gets polluted by big pieces on textured boards),
+  piece pixels = those > `background_tol` (60, summed over channels) from
+  it. The pure, dep-free `move_inference` functions then work on that dict:
+  `highlighted_squares(scans, bottom_white, tol=40)` = squares whose
+  background is > `tol` from the **median background of their chequerboard
+  parity class** (the parity is orientation-independent); `piece_colours(
+  scans, bottom_white, board_map, playing_white)` = `{name: "own" |
+  "opponent" | None}` — occupied if `piece_fraction >= 0.06`, colour by
+  brightness nearest to a per-side reference that is the median brightness
+  of the squares the *model* says hold that side's pieces (recomputed every
+  frame, so any theme works; with no reference for a side everything reads
+  "opponent" and legality decides); `infer_opponent_move(highlighted,
+  colours, is_legal)` keeps every ordered pair of highlighted squares whose
+  origin is empty, destination holds an opponent piece and `is_legal(from,
+  to)` holds, and returns the single candidate (None if 0 or ≥ 2). That one
+  rule rejects our own move's highlight (no opponent piece on our squares),
+  a stale highlight of a move already in the model (the piece is on the
+  origin, not off it), a capture still animating (destination shows our
+  piece) and tolerates extra tints (a red king-in-check square has no legal
+  pairing). `OpponentWatcher(game, grab, schedule, interval=0.25, on_event,
+  scan=None, enabled=True)` polls on the view's `schedule` (no thread):
+  `poll()` returns at once unless `enabled` and `game.opponent_to_move`
+  (so nothing is captured on our turn), else grab → scan → infer →
+  `game.submit_move(*move)` with a `("detected", …)` event; capture/scan
+  exceptions are reported once per distinct message (`("watch", …)`) and
+  polling continues. `start()`/`stop()`/`set_enabled()`. `MirrorGame`
+  exposes `opponent_to_move` and `is_legal(from, to)` (auto-queen) for it.
+  Manual entry keeps working alongside; after an Undo the same highlight is
+  read again unless watching is switched off. Verified on real chess.com
+  screenshots (default theme and a textured green one) and the three
+  fixture piece sets.
 - `app.mirror_main(engine_url)` wires it: `_require_tk()` first (mirror mode
   has no text fallback for its board, so a missing `tkinter` exits at once
   with a `brew install python-tk@X.Y` hint instead of prompting and then
   crashing), then side + box via the setup provider,
-  `build_engine`, `PyAutoGuiActuator`, the window, timestamped console
-  events; `app.main(argv)` dispatches `--mode reader|mirror` via
-  `build_parser()`.
+  `build_engine`, `PyAutoGuiActuator`, the window, an `OpponentWatcher`
+  over `ScreenFrameSource(box).grab` and `view.schedule` (started after
+  `mirror.start()`), timestamped console events; `app.main(argv)`
+  dispatches `--mode reader|mirror` via `build_parser()`.
 
 ### Mocks (`chesscheat/mocks/`) — dependency-free, test the whole pipeline
 
@@ -451,6 +492,26 @@ time are recognised exactly.
   logged). `RemoteMoveEngine`
   against a real local `http.server` (protocol, null move, 5xx, malformed,
   unreachable). `build_parser` modes/engine-url.
+- `test_move_inference.py` — dep-free: `highlighted_squares` (clean board,
+  both squares of a move, orientation, small noise ignored), `piece_colours`
+  (classified from the model's references, sides swap for black, a moved
+  piece classified by brightness not the model, capture, stray pixels, no
+  reference → "opponent"), `infer_opponent_move` (opponent move read, own
+  highlight ignored, stale highlight rejected, capture mid-animation
+  rejected then accepted once landed, extra check tint tolerated,
+  ambiguous/incomplete → None) on synthetic scan dicts.
+- `test_opponent_watcher.py` — `OpponentWatcher` through `MirrorGame` +
+  mocks with scripted scans (`skipUnless(chess)`): no capture on our turn
+  or at game over, detected move submitted and answered, own highlight is
+  not a move, program-as-black reads white's first move, toggle skips
+  capture, the polling loop re-arms until stopped, capture errors logged
+  once and survived.
+- `test_watch_real_images.py` — the real `scan_squares` over the three
+  fixture piece sets composed with last-move tints under the pieces
+  (`skipUnless(numpy + Pillow + chess)`): pawn/knight moves read, own
+  highlight and clean board give nothing, stale highlight after our reply
+  rejected, capture read once landed, a red check tint on our king does not
+  block detection, black orientation reads white's move.
 - `test_assist.py` — the move assist, dep-free via mocks: `cell_of`/
   `parse_square`/`castling_field`/`to_full_fen` helpers, `move_pixels`
   geometry (white/black orientation, promotion suffix ignored), `assist_move`

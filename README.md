@@ -77,18 +77,19 @@ or `pynput` aren't available the reader prints why and runs without it. Set
 > site and will get accounts banned. Use it for analysis, bots, and local
 > experimentation.
 
-### Mirror mode (no detection)
+### Mirror mode (no piece recognition)
 
-`python3 -m chesscheat --mode mirror` skips screen reading entirely. You pick
-your side and click the real board's corners, and a **mirror board** opens
-next to it, oriented exactly like the real app (your side at the bottom) so
-the two boards read identically. Copy each opponent move onto the mirror
-board — click the origin square, then the destination — and the program
-answers immediately in two places: on the mirror board, and in the real chess
-app, by dragging the piece over the region you selected. Illegal entries are
-refused with a message; a pawn you push to the last rank promotes to a queen.
-If you play white the program opens with white's first move; if you play
-black it waits for you to enter white's move.
+`python3 -m chesscheat --mode mirror` skips piece recognition entirely. You
+pick your side and click the real board's corners, and a **mirror board**
+opens next to it, oriented exactly like the real app (your side at the
+bottom) so the two boards read identically. The opponent's moves reach the
+mirror board in either of two ways — read off the real app automatically
+(**Watch app**, below), or copied by you: click the origin square, then the
+destination. Either way the program answers immediately in two places: on
+the mirror board, and in the real chess app, by dragging the piece over the
+region you selected. Illegal entries are refused with a message; a pawn
+pushed to the last rank promotes to a queen. If you play white the program
+opens with white's first move; if you play black it waits for white's move.
 
 The mirror window is placed off the real board (right, left, below or above
 it, whichever fits) so it never sits under the mouse drags.
@@ -100,6 +101,23 @@ A control bar under the board adjusts the behaviour at any time, mid-game:
   (click origin, click destination); those moves are still played in the
   real app for you. Switching it back on while it's your side's turn makes
   the program reply immediately.
+- **Watch app** (toggle, on by default) — infers the opponent's moves from
+  the real app so you don't have to enter them. While it is the opponent's
+  turn the selected region is captured a few times a second and scanned for
+  the app's **last-move highlight**: the two tinted squares. The move is
+  accepted as soon as one tinted square is empty, the other holds a piece of
+  the opponent's colour, and that move is legal — then it is entered for you
+  and answered as usual. Your own moves are highlighted by the app too; they
+  are never mistaken for the opponent's (no legal opponent move starts from
+  your piece), nor is a highlight left over from a move already entered, a
+  capture whose piece is still sliding, or a red "check" tint on your king.
+  No piece images are needed: the two square colours and the piece
+  brightness are learned from each frame itself, so any theme works. A
+  promotion is read as a queen. Turn it off to enter moves by hand (you can
+  still do that while it is on); if a mis-read move got in, Undo it and
+  switch Watch app off before re-entering, or the same highlight is read
+  again. On macOS the capture needs Screen Recording permission (see
+  Troubleshooting).
 - **Reply delay (s) min / max** — the minimum time between the opponent's
   move and the program's reply. Set both ends equal for a fixed delay, or
   apart to add **random jitter**: every reply draws its own delay uniformly
@@ -342,6 +360,17 @@ paints cursor crosses and highlight tints directly onto the real fixture
 images and verifies corrupted frames are rejected while genuine moves still
 land.
 
+Mirror mode's **Watch app** reading is covered three ways:
+`tests/test_move_inference.py` (dependency-free) checks the highlight,
+occupancy/colour and move-inference logic on synthetic square scans;
+`tests/test_opponent_watcher.py` (needs python-chess) drives the watcher
+through the mocks — skips capture on your turn, submits and answers a
+detected move, toggle, polling loop, capture errors logged; and
+`tests/test_watch_real_images.py` (needs numpy, Pillow, python-chess)
+composes the three real piece sets with last-move tints under the pieces
+and checks the opponent's move — and only the opponent's — is read in both
+orientations, including a capture, a knight move and a tinted king in check.
+
 ## Layout
 
 Source lives in the `chesscheat/` package and tests in `tests/`. The code is
@@ -355,6 +384,7 @@ generated positions evolving over time without any GUI or screenshotting.
 ```
 chesscheat/
   app.py            board.py        __main__.py
-  interfaces/   recognition/   providers/   mocks/   capture/   gui/
+  interfaces/   recognition/   providers/   assist/   mirror/   mocks/
+  capture/      gui/
 tests/
 ```

@@ -26,12 +26,14 @@ case "${1:-}" in
         # Only run the dependency-free tests (board logic + mock pipeline).
         exec "$PYTHON" -m unittest tests.test_board tests.test_recognition \
             tests.test_setup_confirmation tests.test_console_output \
-            tests.test_assist tests.test_install_stockfish tests.test_mirror -v
+            tests.test_assist tests.test_install_stockfish tests.test_mirror \
+            tests.test_move_inference tests.test_opponent_watcher -v
         ;;
     --real)
         # Only run tests that need third-party deps (numpy/Pillow/python-chess).
         exec "$PYTHON" -m unittest tests.test_real_images tests.test_general_boards \
-            tests.test_legal_move_filter tests.test_filter_real_images -v
+            tests.test_legal_move_filter tests.test_filter_real_images \
+            tests.test_watch_real_images -v
         ;;
     "")
         # Full suite: discover every test under tests/.
