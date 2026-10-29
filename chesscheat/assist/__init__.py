@@ -5,7 +5,9 @@ detected position, asks a ``MoveEngine`` for the best move, and drives a
 ``MoveActuator`` (``PyAutoGuiActuator``) to drag the piece on screen. Two
 decision makers are provided behind the ``MoveEngine`` interface:
 ``StockfishMoveEngine`` (a local engine binary) and ``RemoteMoveEngine`` (a
-remote HTTP service). Heavy/IO deps (``chess.engine``, ``pyautogui``,
+remote HTTP service); ``BookMoveEngine`` wraps either with a Polyglot
+opening book, and ``style`` chooses among an engine's top lines by
+character (aggressive, solid, unusual). Heavy/IO deps (``chess.engine``, ``pyautogui``,
 ``pynput``) are imported lazily inside the methods that use them, so
 importing this package stays dependency-free.
 """
@@ -13,9 +15,14 @@ importing this package stays dependency-free.
 from chesscheat.assist.stockfish_move_engine import (StockfishMoveEngine,
                                                      limit_strength_options)
 from chesscheat.assist.remote_move_engine import RemoteMoveEngine
+from chesscheat.assist.book_move_engine import BookMoveEngine
+from chesscheat.assist.style import (STYLES, choose_move, eligible_moves,
+                                     aggression, solidity)
 from chesscheat.assist.pyautogui_actuator import PyAutoGuiActuator, move_pixels
 from chesscheat.assist.key_trigger import KeyTrigger
 from chesscheat.assist.coordinator import assist_move
 
 __all__ = ["StockfishMoveEngine", "limit_strength_options", "RemoteMoveEngine",
-           "PyAutoGuiActuator", "move_pixels", "KeyTrigger", "assist_move"]
+           "BookMoveEngine", "STYLES", "choose_move", "eligible_moves",
+           "aggression", "solidity", "PyAutoGuiActuator", "move_pixels",
+           "KeyTrigger", "assist_move"]

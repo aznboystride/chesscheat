@@ -404,6 +404,26 @@ class StrengthTests(unittest.TestCase):
         self.assertIn(("strength", "full"), events)
 
 
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class StyleSettingTests(unittest.TestCase):
+    """The style setting is forwarded to the engine and logged."""
+
+    def test_style_is_forwarded_with_its_margin(self):
+        engine = MockMoveEngine("e2e4")
+        events = []
+        game = MirrorGame(True, BOX, engine, MockMoveActuator(),
+                          MockMirrorView(),
+                          on_event=lambda k, d: events.append((k, d)))
+        self.assertEqual(game.style, "best")
+        game.set_style("aggressive", 0.5)
+        self.assertEqual(engine.styles, [("aggressive", 0.5)])
+        self.assertEqual(game.style, "aggressive")
+        self.assertIn(("style", "aggressive (within 0.5 pawns)"), events)
+        game.set_style("best")
+        self.assertEqual(engine.styles[-1], ("best", None))
+        self.assertIn(("style", "best"), events)
+
+
 class StrengthOptionTests(unittest.TestCase):
     """Pure mapping from a rating to Stockfish's UCI options (dep-free)."""
 
@@ -701,12 +721,16 @@ class RemoteMoveEngineTests(unittest.TestCase):
         engine = RemoteMoveEngine(self.url)
         self.assertEqual(engine.best_move(fen), "e2e4")
         self.assertEqual(_BestMoveHandler.seen,
-                         [{"fen": fen, "elo": None, "think": None}])
+                         [{"fen": fen, "elo": None, "think": None,
+                           "style": "best", "style_margin": None}])
         engine.set_strength(1800)
         engine.set_think_time(0.25)
+        engine.set_style("aggressive", 0.5)
         engine.best_move(fen)
         self.assertEqual(_BestMoveHandler.seen[-1]["elo"], 1800)
         self.assertEqual(_BestMoveHandler.seen[-1]["think"], 0.25)
+        self.assertEqual(_BestMoveHandler.seen[-1]["style"], "aggressive")
+        self.assertEqual(_BestMoveHandler.seen[-1]["style_margin"], 0.5)
 
     def test_evaluate_posts_the_flag_and_reads_the_score(self):
         _BestMoveHandler.reply = {"move": None, "score": {"cp": 35}}
@@ -760,6 +784,17 @@ class ParserTests(unittest.TestCase):
             ["--mode", "mirror", "--engine-url", "http://host/best"])
         self.assertEqual((args.mode, args.engine_url),
                          ("mirror", "http://host/best"))
+
+    def test_style_flags(self):
+        args = build_parser().parse_args([])
+        self.assertEqual((args.style, args.style_margin, args.book),
+                         ("best", 0.3, None))
+        args = build_parser().parse_args(
+            ["--style", "unusual", "--style-margin", "0.8", "--book", "b.bin"])
+        self.assertEqual((args.style, args.style_margin, args.book),
+                         ("unusual", 0.8, "b.bin"))
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["--style", "reckless"])
 
     def test_think_seconds_defaults_and_parses(self):
         self.assertEqual(build_parser().parse_args([]).think_seconds, 0.3)

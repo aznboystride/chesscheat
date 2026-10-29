@@ -142,6 +142,28 @@ A control bar under the board adjusts the behaviour at any time, mid-game:
   of the fixed think time, so the wait buys a stronger move and the reply
   is still ready on time. With it off, the engine always searches for the
   fixed think time and idles for the rest.
+- **Style** and **within (pawns)** — how the engine picks its move. *Best
+  move* plays its first choice. The other styles ask Stockfish for its top
+  five lines, keep those within the margin (default 0.3 pawns) of the best,
+  and choose among them by character: **Aggressive** prefers checks,
+  captures, advances into your opponent's half and moves landing near
+  their king, and dislikes castling and retreats; **Solid** prefers
+  castling, development and quiet moves, and dislikes king walks, captures
+  and queen sorties; **Unusual** avoids the engine's first choice whenever
+  another line is within the margin, picking one of the others at random.
+  The margin is the price in strength you are willing to pay for the
+  style: at 0 every style plays the best move. Both are adjustable
+  mid-game (`--style` and `--style-margin` set the starting values); the
+  remote engine receives them as `style` and `style_margin`. Fetching
+  several lines costs no extra time, since the search is limited by time,
+  but each line is searched a little less deeply.
+
+An optional **opening book** adds variety where it is most visible:
+`--book FILE` takes a Polyglot `.bin` book and plays from it while the
+position is in it (at random, weighted by the book), then hands over to the
+engine. With the *Unusual* style the book's rarest line is played instead,
+for offbeat openings. Books in this format are widely available (e.g. the
+free `gm2600.bin` or any Polyglot book you build yourself).
 
 The engine searches on a background thread, so the window stays live
 while it thinks: you can still pause auto-play, undo or start a new game
@@ -191,10 +213,12 @@ take any implementation:
 | `RemoteMoveEngine` | on another machine, behind an HTTP endpoint | `--engine-url URL` or `CHESSCHEAT_ENGINE_URL` |
 
 The remote protocol is minimal JSON: `POST` `{"fen": "<full FEN>", "elo": N,
-"think": S}` (`elo` is the requested strength, `null` for full; `think` the
-requested search time in seconds, `null` for the service's default; a service
-may ignore both) and reply `{"move": "e2e4"}` (or `{"move": null}` for no
-move). For the
+"think": S, "style": "best", "style_margin": M}` (`elo` is the requested
+strength, `null` for full; `think` the requested search time in seconds,
+`null` for the service's default; `style` one of `best`, `aggressive`,
+`solid`, `unusual` and `style_margin` the pawns it may stray from its best
+line, `null` for the service's default; a service may ignore any of them)
+and reply `{"move": "e2e4"}` (or `{"move": null}` for no move). For the
 evaluation bar the client also `POST`s `{"fen": "<full FEN>", "evaluate":
 true}` after every move and reads an optional `"score"` from the reply —
 `{"cp": 35}` (centipawns) or `{"mate": 3}` (moves to mate, negative when
@@ -204,8 +228,10 @@ the bar stays blank. Any service that speaks this works — a Stockfish on a
 beefier box, a cloud function, a different engine entirely. Implement
 `MoveEngine` yourself for anything else; override its optional
 `set_strength(elo)` if your engine can vary strength, `set_think_time(s)`
-if it can vary its search time, and `evaluate(fen)` if it can score a
-position.
+if it can vary its search time, `set_style(style, margin)` if it can play
+with a character, and `evaluate(fen)` if it can score a position. The
+`chesscheat.assist.style` helpers (`choose_move` and the aggression /
+solidity scores) are reusable by any engine that can list its top lines.
 
 ## Requirements
 

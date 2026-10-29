@@ -27,7 +27,8 @@ case "${1:-}" in
         exec "$PYTHON" -m unittest tests.test_board tests.test_recognition \
             tests.test_setup_confirmation tests.test_console_output \
             tests.test_assist tests.test_install_stockfish tests.test_mirror \
-            tests.test_move_inference tests.test_opponent_watcher -v
+            tests.test_move_inference tests.test_opponent_watcher \
+            tests.test_style -v
         ;;
     --real)
         # Only run tests that need third-party deps (numpy/Pillow/python-chess).

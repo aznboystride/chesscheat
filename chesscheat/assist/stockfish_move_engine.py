@@ -4,7 +4,11 @@ import atexit
 import os
 import shutil
 
+from chesscheat.assist.style import choose_move
 from chesscheat.interfaces import MoveEngine
+
+STYLE_CANDIDATES = 5      # MultiPV lines fetched when a style is on
+MATE_SCORE = 100000       # centipawn stand-in for a forced mate
 
 
 def limit_strength_options(elo, lowest, highest):
@@ -45,11 +49,22 @@ class StockfishMoveEngine(MoveEngine):
     ``SimpleEngine`` serialises commands from several threads, so a search
     on a worker thread and an evaluation elsewhere simply queue.
 
+    A **style** (``set_style``) changes how the move is chosen, not how it
+    is searched: the engine is asked for its top ``STYLE_CANDIDATES`` lines
+    (``MultiPV``) in the same time, and ``chesscheat.assist.style
+    .choose_move`` picks among those within ``style_margin`` pawns of the
+    best. Note Stockfish applies its Elo limit when *choosing* its move,
+    so the candidate lines are its honest best lines regardless of the
+    strength setting; with a style on, the margin is what makes the engine
+    stray.
+
     Attributes:
         path: Absolute path to the engine binary.
         think_time: Seconds the engine is allowed to search per move.
         eval_time: Seconds the engine analyses a position for ``evaluate``.
         elo: Target rating from ``set_strength``, or None for full strength.
+        style: The current style name (``"best"`` = plain best move).
+        style_margin: Pawns below the best line a styled pick may be.
     """
 
     def __init__(self, path=None, think_time=0.3, eval_time=0.1):
@@ -76,6 +91,8 @@ class StockfishMoveEngine(MoveEngine):
         self.think_time = think_time
         self.eval_time = eval_time
         self.elo = None
+        self.style = "best"
+        self.style_margin = 0.3
         self._process = None
         self._exit_hook = False
 
@@ -87,6 +104,18 @@ class StockfishMoveEngine(MoveEngine):
                 0.01 so the engine always gets a real search).
         """
         self.think_time = max(0.01, float(seconds))
+
+    def set_style(self, style, margin=None):
+        """Choose subsequent moves by style among the engine's top lines.
+
+        Args:
+            style: One of ``chesscheat.assist.style.STYLES``.
+            margin: Pawns below the best line a pick may be; None keeps the
+                current margin.
+        """
+        self.style = style
+        if margin is not None:
+            self.style_margin = max(0.0, float(margin))
 
     def set_strength(self, elo):
         """Play at about ``elo`` (Stockfish's ``UCI_LimitStrength`` mode).
@@ -180,6 +209,9 @@ class StockfishMoveEngine(MoveEngine):
         if not position.is_valid() or position.is_game_over():
             return None
 
+        if self.style != "best":
+            return self._styled_move(position, fen)
+
         def play(engine):
             return engine.play(position,
                                chess.engine.Limit(time=self.think_time),
@@ -187,6 +219,33 @@ class StockfishMoveEngine(MoveEngine):
 
         result = self._run(play)
         return result.move.uci() if result.move else None
+
+    def _styled_move(self, position, fen):
+        """Pick among the top lines by the current style.
+
+        Args:
+            position: The ``chess.Board`` to search.
+            fen: Its FEN (for the style heuristics).
+
+        Returns:
+            The chosen move in UCI notation, or None if the engine gave no
+            line.
+        """
+        import chess.engine
+
+        def analyse(engine):
+            return engine.analyse(position,
+                                  chess.engine.Limit(time=self.think_time),
+                                  multipv=STYLE_CANDIDATES,
+                                  options=self._strength_options(engine))
+
+        infos = self._run(analyse)
+        candidates = [
+            (info["pv"][0].uci(),
+             info["score"].pov(position.turn).score(mate_score=MATE_SCORE))
+            for info in infos if info.get("pv") and "score" in info]
+        return choose_move(candidates, self.style, fen,
+                           int(round(self.style_margin * 100)))
 
     def evaluate(self, fen):
         """Analyse ``fen`` briefly at full strength and return its score.

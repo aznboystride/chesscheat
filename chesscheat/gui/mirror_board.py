@@ -15,6 +15,10 @@ GLYPHS = {"K": "♔", "Q": "♕", "R": "♖", "B": "♗",
 STRENGTHS = (("Full strength", None), ("2800", 2800), ("2500", 2500),
              ("2200", 2200), ("1900", 1900), ("1600", 1600), ("1400", 1400))
 
+# Playing styles offered in the GUI: label -> name (see assist.style).
+STYLE_LABELS = (("Best move", "best"), ("Aggressive", "aggressive"),
+                ("Solid", "solid"), ("Unusual", "unusual"))
+
 EVAL_WIDTH = 24           # width of the evaluation bar beside the board
 EVAL_WHITE, EVAL_BLACK = "#f4f4f4", "#3a3a3a"
 
@@ -38,7 +42,9 @@ class MirrorBoardWindow(MirrorView):
     off the real app's last-move highlight instead of entering them), a
     **reply delay range** (min/max seconds; equal for a fixed delay, apart
     for random jitter), the engine **strength**, the engine **think time**
-    with a **Think in delay** toggle, an **Undo** button that takes back the
+    with a **Think in delay** toggle, the playing **style** with the
+    margin (in pawns) it may stray from the best line, an **Undo** button
+    that takes back the
     last opponent move and the reply to it, and a **New game** button that
     asks which colour the user plays now (the real board is reused) -- each
     reported through its own callback. ``set_orientation`` flips the board
@@ -60,8 +66,9 @@ class MirrorBoardWindow(MirrorView):
                  title="chesscheat mirror board", on_auto=None, on_delay=None,
                  on_strength=None, on_undo=None, on_watch=None,
                  on_new_game=None, on_think=None, on_think_in_delay=None,
-                 auto=True, delay=0.0, elo=None, watch=True, think=0.3,
-                 think_in_delay=True):
+                 on_style=None, auto=True, delay=0.0, elo=None, watch=True,
+                 think=0.3, think_in_delay=True, style="best",
+                 style_margin=0.3):
         """Create the window.
 
         Args:
@@ -89,6 +96,8 @@ class MirrorBoardWindow(MirrorView):
             on_think: Callback ``(seconds)`` when the think-time box changes.
             on_think_in_delay: Callback ``(enabled)`` when the Think-in-delay
                 toggle changes.
+            on_style: Callback ``(style, margin_pawns)`` when the style
+                menu or its margin box changes.
             auto: Initial state of the auto-play toggle.
             delay: Initial reply delay shown: seconds, or a ``(min, max)``
                 pair.
@@ -96,6 +105,8 @@ class MirrorBoardWindow(MirrorView):
             watch: Initial state of the Watch-app toggle.
             think: Initial think time shown, in seconds.
             think_in_delay: Initial state of the Think-in-delay toggle.
+            style: Initial style name shown.
+            style_margin: Initial style margin shown, in pawns.
         """
         import tkinter as tk
 
@@ -137,6 +148,7 @@ class MirrorBoardWindow(MirrorView):
         self._build_engine_controls(tk, on_strength, on_think,
                                     on_think_in_delay, elo, think,
                                     think_in_delay)
+        self._build_style_controls(tk, on_style, style, style_margin)
         self._draw_evaluation()
 
     def _build_controls(self, tk, on_auto, on_delay, on_strength, on_undo,
@@ -254,6 +266,44 @@ class MirrorBoardWindow(MirrorView):
             command=lambda: on_think_in_delay and on_think_in_delay(
                 self._think_in_delay_var.get()),
         ).pack(side="left")
+
+    def _build_style_controls(self, tk, on_style, style, margin):
+        """Lay out the style row: style menu and its margin in pawns.
+
+        Args:
+            tk: The imported ``tkinter`` module.
+            on_style: Style change callback ``(style, margin)`` (or None).
+            style: Initial style name.
+            margin: Initial margin in pawns.
+        """
+        bar = tk.Frame(self._root, padx=8, pady=4)
+        bar.pack(fill="x")
+
+        tk.Label(bar, text="Style:").pack(side="left")
+        labels = [label for label, _ in STYLE_LABELS]
+        by_label = dict(STYLE_LABELS)
+        initial = next((label for label, name in STYLE_LABELS
+                        if name == style), labels[0])
+        self._style_var = tk.StringVar(master=self._root, value=initial)
+        self._margin_var = tk.StringVar(master=self._root,
+                                        value=f"{margin:g}")
+
+        def style_changed(*_args):
+            try:
+                pawns = float(self._margin_var.get())
+            except ValueError:
+                return
+            if on_style:
+                on_style(by_label[self._style_var.get()], pawns)
+
+        tk.OptionMenu(bar, self._style_var, *labels,
+                      command=style_changed).pack(side="left")
+        tk.Label(bar, text="  within (pawns):").pack(side="left")
+        box = tk.Spinbox(bar, from_=0, to=5, increment=0.1, width=5,
+                         textvariable=self._margin_var, command=style_changed)
+        box.bind("<Return>", style_changed)
+        box.bind("<FocusOut>", style_changed)
+        box.pack(side="left")
 
     def run_in_background(self, fn, done):
         """Run ``fn`` on a thread and report its result on the Tk loop.

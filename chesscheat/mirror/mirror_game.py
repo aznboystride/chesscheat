@@ -108,6 +108,7 @@ class MirrorGame:
         delay_range: ``(min, max)`` seconds the per-reply delay is drawn from.
         delay: The delay in force for the current/next reply (read-only).
         elo: The strength last requested from the engine, or None.
+        style: The playing style last requested from the engine.
         think_time: Base engine search time per reply, in seconds.
         think_in_delay: Whether a waiting reply may think for the wait.
         max_think: Cap on the search time when thinking in the delay.
@@ -157,6 +158,7 @@ class MirrorGame:
         self.last_move = None
         self.auto = auto
         self.elo = None
+        self.style = "best"
         self._engine = engine
         self._actuator = actuator
         self._view = view
@@ -368,6 +370,20 @@ class MirrorGame:
         self.elo = elo
         self._engine.set_strength(elo)
         self._on_event("strength", "full" if elo is None else f"{elo} Elo")
+
+    def set_style(self, style, margin=None):
+        """Change the engine's playing style for subsequent replies.
+
+        Args:
+            style: One of ``chesscheat.assist.style.STYLES`` (``"best"`` =
+                plain best move).
+            margin: Pawns below its best line the engine may stray to
+                express the style, or None to keep the engine's current.
+        """
+        self.style = style
+        self._engine.set_style(style, margin)
+        self._on_event("style", style if margin is None
+                       else f"{style} (within {margin:g} pawns)")
 
     # -- play --------------------------------------------------------------
 
