@@ -45,24 +45,40 @@ class PyAutoGuiActuator(MoveActuator):
     move is ignored; the site's own promotion prompt (if any) is not
     handled.
 
+    Built for speed: ``pyautogui``'s global after-every-call pause (0.1 s by
+    default, five calls per move) is switched off, the focus pause is a few
+    hundredths of a second and the drag itself takes ``duration`` --
+    ``pyautogui`` only animates a move *longer* than 0.1 s (shorter ones
+    jump straight to the destination) and a web board needs those
+    intermediate motion events to register a drag, so the default sits
+    just above that floor.
+
     Attributes:
         duration: Seconds the cursor takes to travel between squares.
         focus_pause: Seconds to wait after the focusing click before the
             drag begins, giving the window time to come to the front.
     """
 
-    def __init__(self, duration=0.25, focus_pause=0.15):
+    def __init__(self, duration=0.15, focus_pause=0.05):
         """Initialise the actuator.
 
         Args:
-            duration: Seconds the drag from origin to destination takes;
-                a short travel time makes the motion look natural and gives
-                web boards time to register the drag.
+            duration: Seconds the drag from origin to destination takes.
+                Keep it above 0.1: at or below that ``pyautogui`` jumps
+                instead of moving, which web boards may not see as a drag.
             focus_pause: Seconds between the focusing click on the piece
                 and the start of the drag.
         """
         self.duration = duration
         self.focus_pause = focus_pause
+
+    @staticmethod
+    def _pyautogui():
+        """Import ``pyautogui`` with its per-call pause disabled."""
+        import pyautogui
+
+        pyautogui.PAUSE = 0
+        return pyautogui
 
     def apply(self, uci, box, playing_white):
         """Click the piece to focus the app, then drag it to play ``uci``.
@@ -74,8 +90,7 @@ class PyAutoGuiActuator(MoveActuator):
         """
         import time
 
-        import pyautogui
-
+        pyautogui = self._pyautogui()
         (from_x, from_y), (to_x, to_y) = move_pixels(uci, box, playing_white)
         pyautogui.moveTo(from_x, from_y)
         pyautogui.click()                     # activate the chess app window
@@ -91,6 +106,4 @@ class PyAutoGuiActuator(MoveActuator):
             x: Absolute screen x coordinate.
             y: Absolute screen y coordinate.
         """
-        import pyautogui
-
-        pyautogui.moveTo(x, y)
+        self._pyautogui().moveTo(x, y)

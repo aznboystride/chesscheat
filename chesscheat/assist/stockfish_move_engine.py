@@ -40,16 +40,19 @@ class StockfishMoveEngine(MoveEngine):
     Attributes:
         path: Absolute path to the engine binary.
         think_time: Seconds the engine is allowed to search per move.
+        eval_time: Seconds the engine analyses a position for ``evaluate``.
         elo: Target rating from ``set_strength``, or None for full strength.
     """
 
-    def __init__(self, path=None, think_time=0.5):
+    def __init__(self, path=None, think_time=0.5, eval_time=0.1):
         """Locate the engine binary.
 
         Args:
             path: Explicit path to a UCI engine binary; if None, falls back
                 to ``STOCKFISH_PATH`` then ``shutil.which("stockfish")``.
             think_time: Seconds to let the engine search per move.
+            eval_time: Seconds to analyse a position for ``evaluate``; kept
+                short since it runs after every move.
 
         Raises:
             FileNotFoundError: If no engine binary can be located.
@@ -61,6 +64,7 @@ class StockfishMoveEngine(MoveEngine):
                 "No Stockfish binary found. Install Stockfish and put it on "
                 "PATH, or set STOCKFISH_PATH to its location.")
         self.think_time = think_time
+        self.eval_time = eval_time
         self.elo = None
 
     def set_strength(self, elo):
@@ -98,3 +102,33 @@ class StockfishMoveEngine(MoveEngine):
             result = engine.play(position,
                                  chess.engine.Limit(time=self.think_time))
         return result.move.uci() if result.move else None
+
+    def evaluate(self, fen):
+        """Analyse ``fen`` briefly at full strength and return its score.
+
+        The strength limit from ``set_strength`` is deliberately not
+        applied: the bar should show the true evaluation even when the
+        engine plays weakened moves.
+
+        Args:
+            fen: A full FEN string including the side to move.
+
+        Returns:
+            ``{"cp": n}`` or ``{"mate": n}`` from white's perspective, or
+            None for a finished or invalid position.
+        """
+        import chess
+        import chess.engine
+
+        position = chess.Board(fen)
+        if not position.is_valid() or position.is_game_over():
+            return None
+        with chess.engine.SimpleEngine.popen_uci(self.path) as engine:
+            info = engine.analyse(position,
+                                  chess.engine.Limit(time=self.eval_time))
+        score = info.get("score")
+        if score is None:
+            return None
+        white = score.white()
+        return ({"mate": white.mate()} if white.is_mate()
+                else {"cp": white.score()})

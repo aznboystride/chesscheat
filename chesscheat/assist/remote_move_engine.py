@@ -17,6 +17,11 @@ class RemoteMoveEngine(MoveEngine):
       where ``elo`` is the requested strength or ``null`` for full strength
       (the service may ignore it);
     - response: ``{"move": "e2e4"}`` (UCI), or ``{"move": null}`` for no move.
+    - evaluation: ``POST <url>`` with ``{"fen": "<full FEN>", "evaluate":
+      true}``; the response may carry ``"score": {"cp": N}`` or
+      ``{"mate": N}`` from white's perspective (any ``move`` is ignored). A
+      service that does not evaluate simply omits ``score`` (or answers
+      ``{"move": null}`` at once) and the bar shows nothing.
 
     Standard-library only (``urllib``), so no extra client dependency.
 
@@ -59,7 +64,43 @@ class RemoteMoveEngine(MoveEngine):
             RuntimeError: If the service is unreachable, returns a non-2xx
                 status, or replies with malformed JSON.
         """
-        body = json.dumps({"fen": fen, "elo": self.elo}).encode("utf-8")
+        reply = self._post({"fen": fen, "elo": self.elo})
+        if "move" not in reply:
+            raise RuntimeError(f"remote engine at {self.url} replied "
+                               f"without a 'move' field: {reply!r}")
+        return reply["move"] or None
+
+    def evaluate(self, fen):
+        """Ask the remote service to score a position.
+
+        Args:
+            fen: A full FEN string including the side to move.
+
+        Returns:
+            The reply's ``score`` (``{"cp": n}`` / ``{"mate": n}``) when it
+            is a dict, else None.
+
+        Raises:
+            RuntimeError: If the service is unreachable, returns a non-2xx
+                status, or replies with malformed JSON.
+        """
+        score = self._post({"fen": fen, "evaluate": True}).get("score")
+        return score if isinstance(score, dict) else None
+
+    def _post(self, payload):
+        """POST a JSON payload and return the decoded JSON object reply.
+
+        Args:
+            payload: The JSON-serialisable request body.
+
+        Returns:
+            The reply as a dict.
+
+        Raises:
+            RuntimeError: On transport failure, a non-2xx status, malformed
+                JSON or a reply that is not a JSON object.
+        """
+        body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             self.url, data=body, method="POST",
             headers={"Content-Type": "application/json",
@@ -70,7 +111,7 @@ class RemoteMoveEngine(MoveEngine):
                 reply = json.load(r)
         except (OSError, ValueError) as exc:
             raise RuntimeError(f"remote engine at {self.url} failed: {exc}")
-        if not isinstance(reply, dict) or "move" not in reply:
-            raise RuntimeError(f"remote engine at {self.url} replied "
-                               f"without a 'move' field: {reply!r}")
-        return reply["move"] or None
+        if not isinstance(reply, dict):
+            raise RuntimeError(f"remote engine at {self.url} replied with "
+                               f"something other than an object: {reply!r}")
+        return reply

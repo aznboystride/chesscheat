@@ -93,7 +93,8 @@ chesscheat/
                     KeyTrigger, assist_move (move_pixels)
   mirror/           MirrorGame (position_map), gui_placement, OpponentWatcher,
                     move_inference (highlighted_squares, piece_colours,
-                    infer_opponent_move)
+                    infer_opponent_move), evaluation (white_share,
+                    score_label)
   mocks/            Mock{SetupProvider,FrameSource,ImageBackend,MoveEngine,
                     MoveActuator,MoveTrigger,MirrorView}, synthetic_image
   capture/          screenshot
@@ -115,9 +116,10 @@ tests/              test_board, test_recognition, test_legal_move_filter, ...
   square's empty background from one colour to another (for template synthesis).
 - `BoardRecognizer` — `calibrate(image, playing_white)`, `read(image)`.
 - `MoveEngine` — `best_move(fen)` returns the best move (UCI) for a full FEN,
-  or None; plus a **concrete, optional** `set_strength(elo)` (None = full
+  or None; plus **concrete, optional** `set_strength(elo)` (None = full
   strength; the base is a no-op so engines that can't vary strength ignore
-  it). **This is the decision-maker interface**: `StockfishMoveEngine`
+  it) and `evaluate(fen)` → `{"cp": n}` / `{"mate": n}` from **white's**
+  perspective, or None (the base returns None: no evaluation bar). **This is the decision-maker interface**: `StockfishMoveEngine`
   (local binary) and `RemoteMoveEngine` (HTTP service) implement it, and
   `app.build_engine(engine_url)` picks one (`--engine-url` /
   `CHESSCHEAT_ENGINE_URL` → remote, else local). `MoveActuator` —
@@ -242,19 +244,32 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   (no network).
 - `RemoteMoveEngine(url)` — the second decision maker: ``POST {"fen": …,
   "elo": …}`` to an HTTP endpoint (``elo`` from `set_strength`, null = full),
-  reads ``{"move": "e2e4"}`` (``null`` → None).
-  Stdlib ``urllib`` only; raises ``RuntimeError`` on an unreachable service,
-  non-2xx status or a reply without ``move``. Tested against a real local
-  ``http.server`` in `test_mirror.py`.
+  reads ``{"move": "e2e4"}`` (``null`` → None). `evaluate(fen)` posts
+  ``{"fen": …, "evaluate": true}`` and returns the reply's ``score`` dict
+  (``{"cp": n}`` / ``{"mate": n}``) or None when absent/not a dict.
+  Stdlib ``urllib`` only (shared `_post`); raises ``RuntimeError`` on an
+  unreachable service, non-2xx status, malformed JSON or (for `best_move`)
+  a reply without ``move``. Tested against a real local ``http.server`` in
+  `test_mirror.py`. `StockfishMoveEngine.evaluate` runs `engine.analyse`
+  for `eval_time` (0.1 s) in a fresh process **without** the strength
+  limit (the bar shows the true evaluation), converting `info["score"]
+  .white()` to the dict; None for finished/invalid positions.
 - `PyAutoGuiActuator` — `move_pixels(uci, box, playing_white)` (pure: maps the
   from/to squares to screen-pixel centres via `board.parse_square`/`cell_of`)
   then `pyautogui` (lazy): moveTo(origin) → **click** (focuses the chess
   app's window; on macOS the first click on an inactive window only
   activates it, so a cold drag could be swallowed) → sleep(`focus_pause`)
   → mouseDown → moveTo(dest, `duration`) → mouseUp. The piece gets two
-  presses (focus click + the drag's mouse-down). The exact call sequence is
-  pinned in `test_assist.py` with a fake `pyautogui` module. Promotion
-  suffix ignored (site prompt not handled).
+  presses (focus click + the drag's mouse-down). **Tuned for speed**:
+  `_pyautogui()` imports the module with `pyautogui.PAUSE = 0` (its default
+  0.1 s after *every* call would add ~0.5 s per move), `focus_pause` is
+  0.05 s and `duration` 0.15 s — just above the floor, because `pyautogui`
+  only animates a move *strictly longer* than `MINIMUM_DURATION` (0.1 s;
+  shorter ones jump) and a web board needs the intermediate motion events
+  to see a drag (0.15 s gives three steps at `MINIMUM_SLEEP`). The exact call
+  sequence, the pause disabling and the defaults are pinned in
+  `test_assist.py` with a fake `pyautogui` module. Promotion suffix ignored
+  (site prompt not handled).
 - `KeyTrigger(key="a")` — a global `pynput` (lazy) keyboard listener in a
   thread; a matching press sets a `threading.Event` that `poll` edge-consumes.
   On macOS a global listener needs **Input Monitoring** permission; without it
@@ -314,6 +329,24 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   None / no-op). Engine
   and actuator exceptions become status/events, never crashes; an actuator
   failure leaves the GUI move standing so the boards stay in sync.
+- **Evaluation bar**: `_refresh_evaluation()` runs after every position
+  change — `start`, each opponent move (before `_reply`, so the bar moves
+  before the engine thinks about the answer), each program/manual move
+  (right after the push, before the actuator), `undo`, `new_game` — and
+  calls `view.update_evaluation(white_share, label)` (optional concrete
+  `MirrorView` method, default no-op) from `engine.evaluate(fen)` via the
+  pure `evaluation.py` helpers: `white_share(score)` = lichess's logistic
+  cp→probability (mate → 1.0/0.0, None → 0.5), `score_label(score)` =
+  `"+0.35"` / `"-M2"` / `""`. A finished game shows the result string with
+  share 1.0/0.0/0.5 without asking the engine; an `evaluate` exception is
+  logged as `("engine", "evaluation failed: …")` and shows a level blank
+  bar.
+- `new_game(playing_white)` — same box, new side: fresh `chess.Board`,
+  `last_move`/`_last_opponent_to` cleared, `_epoch` bumped (a reply deferred
+  from the old game can never land), event `("new_game", "you play …")`,
+  `view.set_orientation(playing_white)` (optional concrete, default no-op)
+  then `start()` (the program opens at once as white with auto on; the
+  `OpponentWatcher` reads `game.playing_white` each poll so it follows).
 - `undo()` pops plies until the last **opponent** ply is removed (so the
   reply or a manual program move goes too), back onto the opponent's turn;
   `[]`/"Nothing to undo" when no opponent ply exists (the program's opening
@@ -335,13 +368,21 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   last-move/selection highlights, status line, and a control bar (Auto-play
   checkbox, reply-delay **min/max** spinboxes → `on_delay(lo, hi)`,
   strength menu from `STRENGTHS` presets,
-  Undo button → `on_undo`)
+  Undo button → `on_undo`, **New game** button → `ask_side()` (a
+  `messagebox.askyesnocancel`: Yes = white, No = black, Cancel = keep
+  playing) → `on_new_game(playing_white)`)
   reporting each change through its callback; `schedule(seconds, fn)` wraps
   Tk `after` for the controller's non-blocking delay; `square_position(name)`
   maps a square to absolute screen coordinates (canvas `winfo_rootx/y` +
   cell centre, same logical pixels `pyautogui` uses) for the pointer
-  return; a **Watch app** checkbox → `on_watch(enabled)`; `run()` is the Tk
-  mainloop (this mode has no reader loop; the watcher polls via `schedule`).
+  return; a **Watch app** checkbox → `on_watch(enabled)`; an **evaluation
+  bar** canvas (`EVAL_WIDTH` px, left of the board; `update_evaluation`
+  stores `(share, label)` and `_draw_evaluation` fills white's share from
+  white's side — bottom when `bottom_white` — with the label rotated along
+  the bar at the leading side's end); `set_orientation(bottom_white)`
+  flips the board and bar for a new game as the other colour; `run()` is
+  the Tk mainloop (this mode has no reader loop; the watcher polls via
+  `schedule`).
 - **Watching the real app** (`OpponentWatcher`, `move_inference.py`,
   `recognition/square_scan.py`) — infers the opponent's move from the app's
   **last-move highlight** instead of the user entering it. No piece
@@ -394,10 +435,11 @@ on_event)` is the controller, programmed only against `MoveEngine` /
 (board map → synthetic grayscale image with a distinct per-piece pattern, plus
 a square-colour tint that matching ignores), `MockImageBackend` (same
 normalised-correlation logic as the real backend, in pure Python), and the
-assist mocks: `MockMoveEngine` (canned move, records FENs), `MockMoveActuator`
-(records `(uci, box, playing_white)`), `MockMoveTrigger` (`fire()` queues an
+assist mocks: `MockMoveEngine` (canned `move` and `score`, records FENs seen
+by `best_move`/`evaluate`), `MockMoveActuator` (records `(uci, box,
+playing_white)` and `point_to` calls), `MockMoveTrigger` (`fire()` queues an
 activation `poll` consumes), and `MockMirrorView` (records every
-`(board_map, last_move, status)` redraw).
+`(board_map, last_move, status)` redraw, `evaluations` and `orientations`).
 
 ### App loop (`chesscheat/app.py`)
 
@@ -489,9 +531,15 @@ time are recognised exactly.
   reply draws within the range, clamping, a range change redraws a pending
   wait); pointer return (to the opponent's last destination, none before an
   opponent move or without view positions, after manual moves too, failure
-  logged). `RemoteMoveEngine`
+  logged); evaluation bar (`white_share`/`score_label` mapping dep-free;
+  bar updated at start, every move, manual moves and undo; engine without
+  evaluation → level blank bar; evaluate exception logged; game over shows
+  the result without asking the engine); new game (switch to black
+  reorients and waits, as white opens on the same box, a reply pending
+  from the old game cannot land). `RemoteMoveEngine`
   against a real local `http.server` (protocol, null move, 5xx, malformed,
-  unreachable). `build_parser` modes/engine-url.
+  unreachable, `evaluate` posts the flag and reads `score` / None without
+  one / raises on 5xx). `build_parser` modes/engine-url.
 - `test_move_inference.py` — dep-free: `highlighted_squares` (clean board,
   both squares of a move, orientation, small noise ignored), `piece_colours`
   (classified from the model's references, sides swap for black, a moved
@@ -517,8 +565,11 @@ time are recognised exactly.
   geometry (white/black orientation, promotion suffix ignored), `assist_move`
   (builds a side-to-move FEN, plays the move, skips the actuator on None),
   and `run`'s trigger loop (start/stop, fired vs unfired, end-to-end through
-  engine+actuator). A `skipUnless(shutil.which("stockfish"))` case runs the
-  real `StockfishMoveEngine` (legal opening move; None at game over).
+  engine+actuator), the actuator's call sequence with a fake `pyautogui`
+  (focus click then drag, `PAUSE` zeroed, quick defaults, `point_to`). A
+  `skipUnless(shutil.which("stockfish"))` case runs the real
+  `StockfishMoveEngine` (legal opening move; None at game over; `evaluate`
+  signed from white's perspective).
 
 Note `NumpyImageBackend`'s SSIM feature is `(canonical, mean, variance)` over
 the background-canonicalised colour patch: SSIM (per RGB channel, averaged)

@@ -401,7 +401,8 @@ def mirror_main(engine_url=None):
         on_delay=lambda lo, hi: mirror.set_delay_range(lo, hi),
         on_strength=lambda elo: mirror.set_strength(elo),
         on_undo=lambda: mirror.undo(),
-        on_watch=lambda enabled: watcher.set_enabled(enabled))
+        on_watch=lambda enabled: watcher.set_enabled(enabled),
+        on_new_game=lambda white: mirror.new_game(white))
     mirror = MirrorGame(playing_white, box, engine, PyAutoGuiActuator(),
                         view, on_event=log, schedule=view.schedule)
     watcher = OpponentWatcher(mirror, ScreenFrameSource(box).grab,
@@ -411,7 +412,8 @@ def mirror_main(engine_url=None):
                 "from the app's highlight (Watch app) or entered by you. "
                 "Toggle Auto-play, the reply delay and the strength in the "
                 "window at any time; Undo takes back a mis-entered opponent "
-                "move and the reply to it.")
+                "move and the reply to it; New game starts over as either "
+                "colour on the same board.")
     mirror.start()
     watcher.start()
     view.run()

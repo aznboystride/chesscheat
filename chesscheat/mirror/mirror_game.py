@@ -4,6 +4,7 @@ import random
 import time
 
 from chesscheat import board
+from chesscheat.mirror.evaluation import score_label, white_share
 
 
 def position_map(game):
@@ -58,7 +59,13 @@ class MirrorGame:
 
     ``undo`` takes back the last opponent move together with whatever was
     played after it (the engine's reply or a manual move), for correcting a
-    mis-entered move; only the mirror board is reverted.
+    mis-entered move; only the mirror board is reverted. ``new_game`` starts
+    over as either colour on the same real board (the box is kept).
+
+    After every change of position the engine's ``evaluate`` is consulted
+    and the result handed to ``view.update_evaluation`` as a bar share and
+    a label (``chesscheat.mirror.evaluation``); a finished game shows its
+    result instead.
 
     Which decision maker picks the reply is up to the injected
     ``MoveEngine`` (local Stockfish, a remote service, anything). Game rules
@@ -287,10 +294,51 @@ class MirrorGame:
         otherwise the view waits for the user.
         """
         self._opponent_time = self._clock()
+        self._refresh_evaluation()
         if self.auto and self._program_to_move():
             self._reply()
         else:
             self._refresh(self._turn_status())
+
+    def new_game(self, playing_white):
+        """Start over from the initial position, as the given colour.
+
+        The real board's box is kept, so only the side needs choosing. The
+        view is re-oriented to the new side (the user's side at the bottom),
+        any reply still waiting is cancelled, and the program opens at once
+        if it plays white with auto-play on.
+
+        Args:
+            playing_white: True if the program (the user) now plays white.
+        """
+        import chess
+
+        self.playing_white = playing_white
+        self._game = chess.Board()
+        self.last_move = None
+        self._last_opponent_to = None
+        self._epoch += 1
+        self._on_event("new_game", f"you play {self._colour(True)}")
+        self._view.set_orientation(playing_white)
+        self.start()
+
+    def _refresh_evaluation(self):
+        """Score the current position and show it on the view's bar.
+
+        A finished game shows its result; an engine that cannot evaluate
+        (or fails) shows a level, unlabelled bar and logs the failure.
+        """
+        if self._game.is_game_over():
+            result = self._game.result()
+            share = {"1-0": 1.0, "0-1": 0.0}.get(result, 0.5)
+            self._view.update_evaluation(share, result)
+            return
+        try:
+            score = self._engine.evaluate(self.fen)
+        except Exception as exc:
+            self._on_event("engine", f"evaluation failed: {exc}")
+            score = None
+        self._view.update_evaluation(white_share(score), score_label(score))
 
     def _legal(self, from_name, to_name):
         """Resolve two squares to a legal move, auto-queening promotions.
@@ -346,6 +394,7 @@ class MirrorGame:
         self._current_delay = self._draw_delay()   # fresh jitter per reply
         self._epoch += 1
         self._on_event("opponent", move.uci())
+        self._refresh_evaluation()
         if self.auto and not self._game.is_game_over():
             return self._reply()
         self._refresh(self._turn_status())
@@ -388,6 +437,7 @@ class MirrorGame:
         self.last_move = (self._game.move_stack[-1].uci()
                           if self._game.move_stack else None)
         self._on_event("undo", " ".join(undone))
+        self._refresh_evaluation()
         self._refresh(f"Undid {' and '.join(undone)} on this board (the real "
                       f"app is not changed). {self._turn_status()}")
         return undone
@@ -462,6 +512,7 @@ class MirrorGame:
         self._game.push(chess.Move.from_uci(uci))
         self.last_move = uci
         self._on_event(source, uci)
+        self._refresh_evaluation()
         try:
             self._actuator.apply(uci, self.box, self.playing_white)
         except Exception as exc:  # mouse failures must not desync the board

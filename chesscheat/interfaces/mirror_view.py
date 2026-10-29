@@ -27,6 +27,30 @@ class MirrorView(ABC):
     def run(self):
         """Show the view and block until the user closes it."""
 
+    def update_evaluation(self, white_share, label):
+        """Show the engine's evaluation of the current position.
+
+        Optional: the default shows nothing.
+
+        Args:
+            white_share: Fraction of the bar that is white's, in ``[0, 1]``
+                (0.5 = level or unknown).
+            label: Short text such as ``"+0.35"``, ``"M3"`` or a game
+                result; empty when unknown.
+        """
+        return None
+
+    def set_orientation(self, bottom_white):
+        """Redraw with a side at the bottom (after a new game as the other
+        colour).
+
+        Optional: the default does nothing.
+
+        Args:
+            bottom_white: True to put white at the bottom.
+        """
+        return None
+
     def square_position(self, name):
         """Return where a square is on screen, for parking the pointer.
 
