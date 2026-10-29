@@ -289,16 +289,26 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   and is then actuated in the real app too (`_play_program_move`, event
   `"manual"`). Out-of-turn/illegal entries are rejected with a status.
 - Runtime settings, each changeable any time: `set_auto(enabled)` (turning
-  on mid-turn replies at once), `set_delay(seconds)`, `set_strength(elo)`
-  (forwarded to `engine.set_strength`). The **delay** is the minimum time
-  from the opponent's move (`_opponent_time`, via an injectable `clock`) to
-  the reply: `_reply` has the engine think immediately, validates the reply
+  on mid-turn replies at once), `set_delay_range(lo, hi)` (`set_delay(x)` =
+  `[x, x]`), `set_strength(elo)` (forwarded to `engine.set_strength`). The
+  **delay** is the minimum time from the opponent's move (`_opponent_time`,
+  via an injectable `clock`) to the reply; each reply draws its own delay
+  from `delay_range` via an injectable `rng(lo, hi)` (`random.uniform`;
+  equal ends → fixed, no draw) -- redrawn on every opponent move and on a
+  range change, so jitter is per reply and a pending wait follows the new
+  range. `_reply` has the engine think immediately, validates the reply
   is legal, then `_commit_after_delay` either plays now or defers itself via
   the injectable `schedule(seconds, fn)` (Tk `after` in the GUI; immediate
   by default) -- so the view never blocks. A deferred commit is dropped if
   the position changed or auto was paused, and re-defers if the delay was
   raised meanwhile. `_play_program_move` pushes → `actuator.apply(uci, box,
-  playing_white)` (the **real app's** orientation = the user's side). Engine
+  playing_white)` (the **real app's** orientation = the user's side), then
+  `_return_pointer()`: `view.square_position(last opponent destination)`
+  → `actuator.point_to(x, y)` parks the mouse back on the mirror board
+  where the user last clicked (skipped when there is no opponent move or the
+  view reports no position; errors logged). Both `square_position` and
+  `point_to` are optional concrete methods on their interfaces (default
+  None / no-op). Engine
   and actuator exceptions become status/events, never crashes; an actuator
   failure leaves the GUI move standing so the boards stay in sync.
 - `undo()` pops plies until the last **opponent** ply is removed (so the
@@ -320,10 +330,14 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   `bottom_white = view_bottom_white(playing_white)`, unicode
   piece glyphs, click-origin then click-destination → `on_move`,
   last-move/selection highlights, status line, and a control bar (Auto-play
-  checkbox, reply-delay spinbox, strength menu from `STRENGTHS` presets,
+  checkbox, reply-delay **min/max** spinboxes → `on_delay(lo, hi)`,
+  strength menu from `STRENGTHS` presets,
   Undo button → `on_undo`)
   reporting each change through its callback; `schedule(seconds, fn)` wraps
-  Tk `after` for the controller's non-blocking delay; `run()` is the Tk
+  Tk `after` for the controller's non-blocking delay; `square_position(name)`
+  maps a square to absolute screen coordinates (canvas `winfo_rootx/y` +
+  cell centre, same logical pixels `pyautogui` uses) for the pointer
+  return; `run()` is the Tk
   mainloop (this mode has no capture loop).
 - `app.mirror_main(engine_url)` wires it: `_require_tk()` first (mirror mode
   has no text fallback for its board, so a missing `tkinter` exits at once
@@ -430,7 +444,11 @@ time are recognised exactly.
   forwarded to the engine; undo (reverts reply+opponent move, keeps the
   program's opener, cancels a pending reply, a stale timer can't land after
   undo+re-entry thanks to the epoch, reverts a manual move too, re-entry
-  gets a fresh reply). `RemoteMoveEngine`
+  gets a fresh reply); delay jitter (fixed delay never calls the rng, each
+  reply draws within the range, clamping, a range change redraws a pending
+  wait); pointer return (to the opponent's last destination, none before an
+  opponent move or without view positions, after manual moves too, failure
+  logged). `RemoteMoveEngine`
   against a real local `http.server` (protocol, null move, 5xx, malformed,
   unreachable). `build_parser` modes/engine-url.
 - `test_assist.py` — the move assist, dep-free via mocks: `cell_of`/

@@ -393,7 +393,7 @@ def mirror_main(engine_url=None):
     view = MirrorBoardWindow(
         on_move, bottom_white=view_bottom_white(playing_white), avoid_box=box,
         on_auto=lambda enabled: mirror.set_auto(enabled),
-        on_delay=lambda seconds: mirror.set_delay(seconds),
+        on_delay=lambda lo, hi: mirror.set_delay_range(lo, hi),
         on_strength=lambda elo: mirror.set_strength(elo),
         on_undo=lambda: mirror.undo())
     mirror = MirrorGame(playing_white, box, engine, PyAutoGuiActuator(),

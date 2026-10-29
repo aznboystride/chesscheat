@@ -1,5 +1,6 @@
 """The ``MirrorGame`` controller."""
 
+import random
 import time
 
 from chesscheat import board
@@ -42,10 +43,18 @@ class MirrorGame:
       board, and those moves are still played in the real app. Turning it on
       mid-turn makes the program reply at once.
     - ``delay`` -- the minimum seconds between the opponent's move and the
-      program's reply. The engine thinks immediately; the reply is held back
-      until the delay has elapsed, without blocking the view (``schedule``),
-      and is cancelled if the position changes or auto is paused meanwhile.
+      program's reply, drawn afresh for every reply from ``delay_range``
+      (a fixed value when the range's ends are equal, otherwise uniform
+      random jitter within it). The engine thinks immediately; the reply is
+      held back until the delay has elapsed, without blocking the view
+      (``schedule``), and is cancelled if the position changes or auto is
+      paused meanwhile.
     - strength -- forwarded to ``engine.set_strength`` for the next reply.
+
+    After the program's move has been played in the real app, the mouse
+    pointer is returned to the mirror board, onto the square the opponent's
+    last move ended on (where the user last clicked), if the view can say
+    where that is on screen.
 
     ``undo`` takes back the last opponent move together with whatever was
     played after it (the engine's reply or a manual move), for correcting a
@@ -62,13 +71,14 @@ class MirrorGame:
         box: The real app board's ``(x1, y1, x2, y2)`` screen bounding box.
         last_move: The most recent move in UCI, or None.
         auto: Whether the engine plays the program's side automatically.
-        delay: Minimum seconds from the opponent's move to the reply.
+        delay_range: ``(min, max)`` seconds the per-reply delay is drawn from.
+        delay: The delay in force for the current/next reply (read-only).
         elo: The strength last requested from the engine, or None.
     """
 
     def __init__(self, playing_white, box, engine, actuator, view,
                  on_event=lambda kind, detail: None, auto=True, delay=0.0,
-                 clock=time.time, schedule=None):
+                 clock=time.time, schedule=None, rng=random.uniform):
         """Initialise a fresh game from the starting position.
 
         Args:
@@ -80,12 +90,15 @@ class MirrorGame:
                 user's picks back through ``submit_move``.
             on_event: Optional ``(kind, detail)`` callback for logging.
             auto: Initial automatic-play setting.
-            delay: Initial minimum reply delay in seconds.
+            delay: Initial reply delay: a number of seconds (fixed), or a
+                ``(min, max)`` pair to jitter within.
             clock: Time source (seconds), injectable for testing.
             schedule: ``schedule(seconds, fn)`` deferring ``fn`` without
                 blocking (e.g. Tk's ``after``). None runs ``fn`` at once,
                 which makes the delay a blocking no-op -- fine for tests,
                 not for a GUI.
+            rng: ``rng(lo, hi)`` returning a float in ``[lo, hi]``, used to
+                draw each reply's delay; defaults to ``random.uniform``.
         """
         import chess
 
@@ -93,7 +106,6 @@ class MirrorGame:
         self.box = box
         self.last_move = None
         self.auto = auto
-        self.delay = max(0.0, float(delay))
         self.elo = None
         self._engine = engine
         self._actuator = actuator
@@ -101,12 +113,46 @@ class MirrorGame:
         self._on_event = on_event
         self._clock = clock
         self._schedule = schedule or (lambda seconds, fn: fn())
+        self._rng = rng
         self._game = chess.Board()
         self._opponent_time = clock()
+        self._last_opponent_to = None
         # Bumped whenever the opponent's move history changes (a new opponent
         # move, an undo) so a reply scheduled for an earlier state can never
         # land -- even if the user re-enters the very same move.
         self._epoch = 0
+        lo, hi = delay if isinstance(delay, (tuple, list)) else (delay, delay)
+        self.delay_range = self._clamped_range(lo, hi)
+        self._current_delay = self._draw_delay()
+
+    @staticmethod
+    def _clamped_range(lo, hi):
+        """Normalise a delay range: no negatives, max never below min.
+
+        Args:
+            lo: Requested minimum seconds.
+            hi: Requested maximum seconds.
+
+        Returns:
+            A ``(min, max)`` pair of floats.
+        """
+        lo = max(0.0, float(lo))
+        return lo, max(lo, float(hi))
+
+    def _draw_delay(self):
+        """Draw the delay for one reply from ``delay_range``.
+
+        Returns:
+            The range's single value when its ends coincide, else a sample
+            from ``rng`` within it.
+        """
+        lo, hi = self.delay_range
+        return lo if hi <= lo else float(self._rng(lo, hi))
+
+    @property
+    def delay(self):
+        """The delay in force for the current or next reply, in seconds."""
+        return self._current_delay
 
     # -- queries -----------------------------------------------------------
 
@@ -176,17 +222,32 @@ class MirrorGame:
             self._refresh(self._turn_status())
 
     def set_delay(self, seconds):
-        """Set the minimum delay before the program replies.
-
-        Applies to the next reply; a pending reply that has not fired yet is
-        held until the new delay has elapsed too.
+        """Set a fixed reply delay (shorthand for a range of one value).
 
         Args:
             seconds: Minimum seconds between the opponent's move and the
                 program's reply (negative values count as zero).
         """
-        self.delay = max(0.0, float(seconds))
-        self._on_event("delay", f"{self.delay:g}s")
+        self.set_delay_range(seconds, seconds)
+
+    def set_delay_range(self, lo, hi):
+        """Set the range each reply's delay is drawn from.
+
+        Equal ends give a fixed delay; otherwise every reply gets its own
+        uniformly random delay within the range (jitter). Applies to the
+        next reply and to a reply that is still waiting: its delay is drawn
+        again from the new range and the wait is held until that has
+        elapsed too.
+
+        Args:
+            lo: Minimum seconds (negative counts as zero).
+            hi: Maximum seconds (raised to ``lo`` if below it).
+        """
+        self.delay_range = self._clamped_range(lo, hi)
+        self._current_delay = self._draw_delay()
+        lo, hi = self.delay_range
+        self._on_event("delay", f"{lo:g}s" if hi <= lo
+                       else f"{lo:g}s to {hi:g}s (random)")
 
     def set_strength(self, elo):
         """Change the engine's playing strength for subsequent replies.
@@ -262,6 +323,8 @@ class MirrorGame:
         self._game.push(move)
         self.last_move = move.uci()
         self._opponent_time = self._clock()
+        self._last_opponent_to = to_name
+        self._current_delay = self._draw_delay()   # fresh jitter per reply
         self._epoch += 1
         self._on_event("opponent", move.uci())
         if self.auto and not self._game.is_game_over():
@@ -356,7 +419,7 @@ class MirrorGame:
         if (not self.auto or epoch != self._epoch
                 or self._game.fen() != fen):
             return None
-        remaining = self.delay - (self._clock() - self._opponent_time)
+        remaining = self._current_delay - (self._clock() - self._opponent_time)
         if remaining <= 0:
             return self._play_program_move(uci, "program")
         self._refresh(f"Waiting {remaining:.1f}s before replying...")
@@ -387,5 +450,24 @@ class MirrorGame:
             self._refresh(f"Played {uci} here, but could not move the mouse: "
                           f"{exc}")
             return uci
+        self._return_pointer()
         self._refresh(f"Played {uci}. {self._turn_status()}")
         return uci
+
+    def _return_pointer(self):
+        """Park the mouse on the mirror board after a move in the real app.
+
+        Targets the square the opponent's last move ended on -- where the
+        user last clicked -- so their hand is back where the next entry
+        starts. Silently skipped when there is no opponent move yet or the
+        view cannot locate the square on screen; pointer errors are logged.
+        """
+        if self._last_opponent_to is None:
+            return
+        position = self._view.square_position(self._last_opponent_to)
+        if position is None:
+            return
+        try:
+            self._actuator.point_to(*position)
+        except Exception as exc:
+            self._on_event("actuator", f"pointer return failed: {exc}")

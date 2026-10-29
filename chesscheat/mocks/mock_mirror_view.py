@@ -10,12 +10,31 @@ class MockMirrorView(MirrorView):
         updates: A list of ``(board_map, last_move, status)`` tuples, one per
             ``update`` call, in order.
         ran: True once ``run`` has been called.
+        positions: A ``{square_name: (x, y)}`` map ``square_position``
+            answers from; empty by default (no positions known).
     """
 
-    def __init__(self):
-        """Initialise the mock with an empty record."""
+    def __init__(self, positions=None):
+        """Initialise the mock with an empty record.
+
+        Args:
+            positions: Optional ``{square_name: (x, y)}`` screen positions
+                to report from ``square_position``.
+        """
         self.updates = []
         self.ran = False
+        self.positions = dict(positions or {})
+
+    def square_position(self, name):
+        """Return the configured position for ``name``, or None.
+
+        Args:
+            name: A square in algebraic notation.
+
+        Returns:
+            The ``(x, y)`` from ``positions``, or None if unknown.
+        """
+        return self.positions.get(name)
 
     def update(self, board_map, last_move, status):
         """Record a redraw request.

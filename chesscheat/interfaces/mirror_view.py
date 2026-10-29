@@ -26,3 +26,18 @@ class MirrorView(ABC):
     @abstractmethod
     def run(self):
         """Show the view and block until the user closes it."""
+
+    def square_position(self, name):
+        """Return where a square is on screen, for parking the pointer.
+
+        Optional: the default reports no position, which disables the
+        pointer-return behaviour.
+
+        Args:
+            name: A square in algebraic notation, e.g. ``"e5"``.
+
+        Returns:
+            The square centre's absolute screen ``(x, y)``, or None if the
+            view cannot say (not shown yet, or not a screen view).
+        """
+        return None

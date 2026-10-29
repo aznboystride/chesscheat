@@ -83,3 +83,14 @@ class PyAutoGuiActuator(MoveActuator):
         pyautogui.mouseDown(button="left")    # second press: start the drag
         pyautogui.moveTo(to_x, to_y, duration=self.duration)
         pyautogui.mouseUp(button="left")
+
+    def point_to(self, x, y):
+        """Move the pointer to ``(x, y)`` without clicking.
+
+        Args:
+            x: Absolute screen x coordinate.
+            y: Absolute screen y coordinate.
+        """
+        import pyautogui
+
+        pyautogui.moveTo(x, y)

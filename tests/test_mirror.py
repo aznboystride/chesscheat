@@ -520,6 +520,139 @@ class UndoTests(unittest.TestCase):
         self.assertEqual([a[0] for a in actuator.applied], ["e7e5", "e7e5"])
 
 
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class DelayJitterTests(unittest.TestCase):
+    """Each reply's delay is drawn from a min/max range."""
+
+    def _game(self, delay, draws, **kwargs):
+        self.now = [100.0]
+        self.scheduler = _Scheduler()
+        self.rng_calls = []
+        samples = iter(draws)
+
+        def rng(lo, hi):
+            self.rng_calls.append((lo, hi))
+            return next(samples)
+
+        self.engine = engine = MockMoveEngine("e7e5")
+        actuator, view = MockMoveActuator(), MockMirrorView()
+        events = []
+        game = MirrorGame(False, BOX, engine, actuator, view, delay=delay,
+                          clock=lambda: self.now[0], schedule=self.scheduler,
+                          rng=rng,
+                          on_event=lambda k, d: events.append((k, d)),
+                          **kwargs)
+        game.start()
+        return game, actuator, events
+
+    def test_fixed_delay_never_consults_the_rng(self):
+        game, _, _ = self._game(delay=3.0, draws=[])
+        game.submit_move("e2", "e4")
+        self.assertEqual(self.rng_calls, [])
+        self.assertEqual(game.delay, 3.0)
+        self.assertAlmostEqual(self.scheduler.pending[0][0], 3.0)
+
+    def test_each_reply_draws_its_own_delay_within_the_range(self):
+        game, actuator, _ = self._game(delay=(2.0, 6.0),
+                                       draws=[4.5, 2.2, 5.9])
+        game.submit_move("e2", "e4")              # draw 2.2 (4.5 was initial)
+        self.assertEqual(self.rng_calls[-1], (2.0, 6.0))
+        self.assertAlmostEqual(game.delay, 2.2)
+        self.assertAlmostEqual(self.scheduler.pending[0][0], 2.2)
+        self.now[0] += 2.2
+        self.scheduler.fire()
+        self.assertEqual([a[0] for a in actuator.applied], ["e7e5"])
+        self.engine.move = "b8c6"                 # e7e5 is no longer legal
+        game.submit_move("g1", "f3")              # next reply: draw 5.9
+        self.assertEqual(self.rng_calls[-1], (2.0, 6.0))
+        self.assertAlmostEqual(game.delay, 5.9)
+        self.assertAlmostEqual(self.scheduler.pending[0][0], 5.9)
+
+    def test_range_is_clamped(self):
+        game, _, events = self._game(delay=(5.0, 2.0), draws=[2.5])
+        self.assertEqual(game.delay_range, (5.0, 5.0))  # max raised to min
+        self.assertEqual(self.rng_calls, [])            # collapsed: no draw
+        game.set_delay_range(-4, -1)
+        self.assertEqual(game.delay_range, (0.0, 0.0))
+        game.set_delay_range(1, 3)                      # draws 2.5
+        self.assertEqual(game.delay_range, (1.0, 3.0))
+        self.assertEqual(self.rng_calls, [(1.0, 3.0)])
+        self.assertAlmostEqual(game.delay, 2.5)
+        self.assertIn(("delay", "1s to 3s (random)"), events)
+        game.set_delay(2)
+        self.assertEqual(game.delay_range, (2.0, 2.0))
+        self.assertIn(("delay", "2s"), events)
+
+    def test_changing_the_range_redraws_a_pending_wait(self):
+        game, actuator, _ = self._game(delay=(1.0, 2.0), draws=[1.5, 1.0, 7.0])
+        game.submit_move("e2", "e4")              # delay 1.0 drawn, deferred
+        game.set_delay_range(6.0, 8.0)            # redraws: 7.0
+        self.assertAlmostEqual(game.delay, 7.0)
+        self.now[0] += 1.0
+        self.scheduler.fire()                     # original timer: too early
+        self.assertEqual(actuator.applied, [])
+        self.assertAlmostEqual(self.scheduler.pending[0][0], 6.0)
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class PointerReturnTests(unittest.TestCase):
+    """After the reply lands in the real app, the mouse comes back to the
+    mirror board on the opponent's last destination square."""
+
+    def _game(self, playing_white, move, positions=None, **kwargs):
+        engine = MockMoveEngine(move)
+        actuator = MockMoveActuator()
+        view = MockMirrorView(positions=positions)
+        events = []
+        game = MirrorGame(playing_white, BOX, engine, actuator, view,
+                          on_event=lambda k, d: events.append((k, d)),
+                          **kwargs)
+        game.start()
+        return game, actuator, events
+
+    def test_pointer_returns_to_opponents_destination_square(self):
+        game, actuator, _ = self._game(False, "e7e5",
+                                       positions={"e4": (1234, 567)})
+        game.submit_move("e2", "e4")
+        self.assertEqual(actuator.applied, [("e7e5", BOX, False)])
+        self.assertEqual(actuator.pointed, [(1234, 567)])
+
+    def test_no_pointer_move_before_any_opponent_move(self):
+        _, actuator, _ = self._game(True, "e2e4", positions={"e4": (1, 2)})
+        # The program opened; there is no opponent square to return to.
+        self.assertEqual(actuator.applied, [("e2e4", BOX, True)])
+        self.assertEqual(actuator.pointed, [])
+
+    def test_view_without_positions_skips_the_return(self):
+        game, actuator, _ = self._game(False, "e7e5")   # no positions
+        game.submit_move("e2", "e4")
+        self.assertEqual(actuator.pointed, [])
+
+    def test_manual_move_also_returns_the_pointer(self):
+        game, actuator, _ = self._game(True, "e2e4", auto=False,
+                                       positions={"e5": (40, 50)})
+        game.submit_move("e2", "e4")              # user plays white by hand
+        self.assertEqual(actuator.pointed, [])    # no opponent move yet
+        game.submit_move("e7", "e5")              # opponent
+        game.submit_move("g1", "f3")              # user plays white by hand
+        self.assertEqual(actuator.pointed, [(40, 50)])
+
+    def test_pointer_failure_is_logged_not_raised(self):
+        class NoPointer(MockMoveActuator):
+            def point_to(self, x, y):
+                raise OSError("pointer blocked")
+
+        view = MockMirrorView(positions={"e4": (1, 1)})
+        events = []
+        game = MirrorGame(False, BOX, MockMoveEngine("e7e5"), NoPointer(),
+                          view, on_event=lambda k, d: events.append((k, d)))
+        game.start()
+        self.assertEqual(game.submit_move("e2", "e4"), "e7e5")
+        self.assertIn(("actuator", "pointer return failed: pointer blocked"),
+                      events)
+        self.assertIn("Played e7e5", view.updates[-1][2])
+
+
 class _BestMoveHandler(BaseHTTPRequestHandler):
     """A tiny best-move service: records requests, replies as configured."""
 
