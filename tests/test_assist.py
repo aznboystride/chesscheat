@@ -6,8 +6,16 @@ guarded test runs the real ``StockfishMoveEngine`` when a Stockfish binary is
 actually available.
 """
 
+import os
+import sys
 import shutil
 import unittest
+
+try:
+    import chess  # noqa: F401
+    _HAVE_CHESS = True
+except ImportError:
+    _HAVE_CHESS = False
 
 from chesscheat import app, board
 from chesscheat.assist import assist_move, move_pixels
@@ -309,6 +317,68 @@ class InterfaceConformanceTests(unittest.TestCase):
         self.assertIsInstance(MockMoveEngine(), MoveEngine)
         self.assertIsInstance(MockMoveActuator(), MoveActuator)
         self.assertIsInstance(MockMoveTrigger(), MoveTrigger)
+
+
+FAKE_ENGINE = os.path.join(os.path.dirname(__file__), "fixtures",
+                           "fake_uci_engine.py")
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class PersistentEngineProcessTests(unittest.TestCase):
+    """``StockfishMoveEngine`` against the fake UCI engine in fixtures."""
+
+    def _engine(self, *args):
+        from chesscheat.assist import StockfishMoveEngine
+
+        engine = StockfishMoveEngine(path=[sys.executable, FAKE_ENGINE,
+                                           *args],
+                                     think_time=0.01, eval_time=0.01)
+        self.addCleanup(engine.close)
+        return engine
+
+    def test_one_process_serves_searches_and_evaluations(self):
+        engine = self._engine()
+        self.assertFalse(engine.running)
+        fen = board.to_full_fen(board.starting_board(), True)
+        first = engine.best_move(fen)
+        self.assertRegex(first, r"^[a-h][1-8][a-h][1-8]$")  # a legal opener
+        self.assertTrue(engine.running)
+        process = engine._process
+        self.assertEqual(engine.evaluate(fen), {"cp": 37})
+        self.assertEqual(engine.best_move(fen), first)
+        self.assertIs(engine._process, process)           # reused, not reopened
+        engine.close()
+        self.assertFalse(engine.running)
+        engine.close()                                    # idempotent
+
+    def test_strength_is_per_search_and_evaluation_is_always_full(self):
+        engine = self._engine()
+        fen = board.to_full_fen(board.starting_board(), True)
+        engine.set_strength(1500)
+        engine.best_move(fen)
+        # The fake reports a negative score while limited: the evaluation
+        # must have switched the shared process back to full strength.
+        self.assertEqual(engine.evaluate(fen), {"cp": 37})
+        engine.set_strength(None)
+        engine.best_move(fen)
+        self.assertEqual(engine.evaluate(fen), {"cp": 37})
+
+    def test_black_to_move_score_is_from_whites_perspective(self):
+        engine = self._engine()
+        fen = ("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1")
+        self.assertEqual(engine.evaluate(fen), {"cp": -37})
+
+    def test_a_dead_process_is_dropped_and_the_next_call_reopens(self):
+        import chess.engine
+
+        engine = self._engine("crash")
+        fen = board.to_full_fen(board.starting_board(), True)
+        with self.assertRaises(chess.engine.EngineError):
+            engine.best_move(fen)
+        self.assertFalse(engine.running)
+        with self.assertRaises(chess.engine.EngineError):
+            engine.best_move(fen)                        # reopened, crashed again
+        self.assertFalse(engine.running)
 
 
 @unittest.skipUnless(shutil.which("stockfish"), "requires a Stockfish binary")

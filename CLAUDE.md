@@ -225,13 +225,20 @@ playing_white, box, engine, actuator)` (in `coordinator.py`) is pure
 orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
 `actuator.apply(uci, box, playing_white)`, returning the UCI played.
 - `StockfishMoveEngine` — locates a binary (explicit path / `STOCKFISH_PATH` /
-  `shutil.which("stockfish")`) at construction; `best_move` opens a UCI engine
-  per call via **python-chess** (`chess.engine`, lazy), returns None for an
-  invalid/finished position; `think_time` (default **0.3 s**, settable via
-  `set_think_time`, floor 0.01) is the `Limit(time=…)`. `set_strength(elo)` is applied to each fresh
-  process via the pure `limit_strength_options(elo, min, max)` →
-  `{UCI_LimitStrength, UCI_Elo}` clamped to the engine's advertised range
-  (skipped if the engine has no `UCI_Elo` option). The binary is normally supplied by
+  `shutil.which("stockfish")`; `path` may also be a command list) at
+  construction; **one UCI process is kept alive** across calls via
+  **python-chess** (`chess.engine`, lazy): `_engine()` opens it on first
+  use and registers `close` with `atexit`; `_run(action)` closes and
+  re-raises on `chess.engine.EngineError` so a dead process is reopened by
+  the next call; `running` tells; `SimpleEngine` serialises commands from
+  several threads (a worker-thread search and an evaluation just queue).
+  `best_move` returns None for an invalid/finished position; `think_time`
+  (default **0.3 s**, settable via `set_think_time`, floor 0.01) is the
+  `Limit(time=…)`. Strength is sent as **per-call `options`** on every
+  `play` via the pure `limit_strength_options(elo, min, max)` →
+  `{UCI_LimitStrength, UCI_Elo}` clamped to the engine's advertised range,
+  or `{UCI_LimitStrength: False}` for None (restoring a process limited
+  earlier); skipped if the engine has no `UCI_Elo` option. The binary is normally supplied by
   `scripts/install_stockfish.py` (run from `setup.sh`), which picks the
   release asset for the host — `asset_candidates`/`select_asset` map
   system/machine to the right tarball. Since **Stockfish 19** every platform
@@ -256,9 +263,14 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   unreachable service, non-2xx status, malformed JSON or (for `best_move`)
   a reply without ``move``. Tested against a real local ``http.server`` in
   `test_mirror.py`. `StockfishMoveEngine.evaluate` runs `engine.analyse`
-  for `eval_time` (0.1 s) in a fresh process **without** the strength
-  limit (the bar shows the true evaluation), converting `info["score"]
-  .white()` to the dict; None for finished/invalid positions.
+  for `eval_time` (0.1 s) on the shared process with per-call
+  `{UCI_LimitStrength: False}` (the bar shows the true evaluation even
+  while the engine plays weakened), converting `info["score"].white()` to
+  the dict; None for finished/invalid positions. Both are exercised
+  without Stockfish by `tests/fixtures/fake_uci_engine.py`, a minimal UCI
+  engine (advertises `UCI_LimitStrength`/`UCI_Elo`, answers the first
+  legal move with `score cp ±37` encoding whether it was limited, `crash`
+  argument dies on `go`) run as `[sys.executable, path]`.
 - `PyAutoGuiActuator` — `move_pixels(uci, box, playing_white)` (pure: maps the
   from/to squares to screen-pixel centres via `board.parse_square`/`cell_of`)
   then `pyautogui` (lazy): moveTo(origin) → **click** (focuses the chess
@@ -349,9 +361,14 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   and actuator exceptions become status/events, never crashes; an actuator
   failure leaves the GUI move standing so the boards stay in sync.
 - **Evaluation bar**: `_refresh_evaluation()` runs after every position
-  change — `start`, each opponent move (before `_reply`, so the bar moves
-  before the engine thinks about the answer), each program/manual move
-  (right after the push, before the actuator), `undo`, `new_game` — and
+  change — `start`, each opponent move, each program/manual move, `undo`,
+  `new_game` — **off the critical path**: the engine is asked through the
+  `worker` (so a persistent engine busy with the search just queues the
+  analysis, and the GUI never waits), and it is dispatched only *after*
+  `_reply` has started the search / after the actuator has dragged (with a
+  synchronous worker an instantly-played reply skips the pre-reply score,
+  since the post-reply one follows at once); a score for a position that
+  changed meanwhile is dropped (fen check). It
   calls `view.update_evaluation(white_share, label)` (optional concrete
   `MirrorView` method, default no-op) from `engine.evaluate(fen)` via the
   pure `evaluation.py` helpers: `white_share(score)` = lichess's logistic
@@ -434,13 +451,21 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   a stale highlight of a move already in the model (the piece is on the
   origin, not off it), a capture still animating (destination shows our
   piece) and tolerates extra tints (a red king-in-check square has no legal
-  pairing). `OpponentWatcher(game, grab, schedule, interval=0.25, on_event,
-  scan=None, enabled=True)` polls on the view's `schedule` (no thread):
-  `poll()` returns at once unless `enabled` and `game.opponent_to_move`
-  (so nothing is captured on our turn), else grab → scan → infer →
-  `game.submit_move(*move)` with a `("detected", …)` event; capture/scan
+  pairing). `OpponentWatcher(game, grab, schedule, interval=0.02, on_event,
+  scan=None, enabled=True, threaded=True, idle_sleep=0.05)` **captures as
+  fast as the screen can be read**: `start()` launches a daemon
+  `_capture_loop` that grabs + scans back to back whenever `_wanted` is
+  set and parks the newest scan in `_latest` (a one-slot mailbox; errors in
+  `_latest_error`), sleeping `idle_sleep` otherwise; the GUI-side `_tick`
+  on the view's `schedule` every `interval` refreshes `_wanted = enabled
+  and game.opponent_to_move` (the thread never touches the game model —
+  python-chess boards are not thread-safe) and `_consume()`s the mailbox:
+  infer → `game.submit_move(*move)` with a `("detected", …)` event, on the
+  GUI thread. `threaded=False` makes each tick a synchronous `poll()`
+  (grab → scan → infer), the path the mock tests drive. Capture/scan
   exceptions are reported once per distinct message (`("watch", …)`) and
-  polling continues. `start()`/`stop()`/`set_enabled()`. `MirrorGame`
+  watching continues. `stop()` clears the flags and ends the thread.
+  `set_enabled()`. `MirrorGame`
   exposes `opponent_to_move` and `is_legal(from, to)` (auto-queen) for it.
   Manual entry keeps working alongside; after an Undo the same highlight is
   read again unless watching is switched off. Verified on real chess.com
@@ -588,11 +613,15 @@ time are recognised exactly.
   rejected then accepted once landed, extra check tint tolerated,
   ambiguous/incomplete → None) on synthetic scan dicts.
 - `test_opponent_watcher.py` — `OpponentWatcher` through `MirrorGame` +
-  mocks with scripted scans (`skipUnless(chess)`): no capture on our turn
-  or at game over, detected move submitted and answered, own highlight is
-  not a move, program-as-black reads white's first move, toggle skips
-  capture, the polling loop re-arms until stopped, capture errors logged
-  once and survived.
+  mocks with scripted scans (`skipUnless(chess)`), synchronous
+  (`threaded=False`): no capture on our turn or at game over, detected
+  move submitted and answered, own highlight is not a move,
+  program-as-black reads white's first move, toggle skips capture, the
+  polling loop re-arms until stopped, capture errors logged once and
+  survived; and threaded with a real capture thread: grabs back to back
+  once a tick wants them and a tick submits the newest scan's move,
+  nothing captured on our turn, a thread-side error reported once, `stop`
+  ends the thread.
 - `test_watch_real_images.py` — the real `scan_squares` over the three
   fixture piece sets composed with last-move tints under the pieces
   (`skipUnless(numpy + Pillow + chess)`): pawn/knight moves read, own
@@ -605,7 +634,12 @@ time are recognised exactly.
   (builds a side-to-move FEN, plays the move, skips the actuator on None),
   and `run`'s trigger loop (start/stop, fired vs unfired, end-to-end through
   engine+actuator), the actuator's call sequence with a fake `pyautogui`
-  (focus click then drag, `PAUSE` zeroed, quick defaults, `point_to`). A
+  (focus click then drag, `PAUSE` zeroed, quick defaults, `point_to`).
+  `PersistentEngineProcessTests` run `StockfishMoveEngine` against
+  `fixtures/fake_uci_engine.py` (`skipUnless(chess)`): one process serves
+  searches and evaluations and is reused, strength is per search while
+  evaluation is always full, black-to-move scores are white-relative, a
+  crashed process is dropped and reopened. A
   `skipUnless(shutil.which("stockfish"))` case runs the real
   `StockfishMoveEngine` (legal opening move; None at game over; `evaluate`
   signed from white's perspective).

@@ -378,10 +378,11 @@ class MirrorGame:
         otherwise the view waits for the user.
         """
         self._opponent_time = self._clock()
-        self._refresh_evaluation()
         if self.auto and self._program_to_move():
-            self._reply()
+            if self._reply() is None:          # not answered on the spot
+                self._refresh_evaluation()
         else:
+            self._refresh_evaluation()
             self._refresh(self._turn_status())
 
     def new_game(self, playing_white):
@@ -409,20 +410,31 @@ class MirrorGame:
     def _refresh_evaluation(self):
         """Score the current position and show it on the view's bar.
 
-        A finished game shows its result; an engine that cannot evaluate
-        (or fails) shows a level, unlabelled bar and logs the failure.
+        The engine is asked through the ``worker``, off the critical path:
+        it is dispatched only after a reply search has been started (or a
+        move actuated), so the bar never delays the program's move. A score
+        arriving for a position that has since changed is dropped. A
+        finished game shows its result at once; an engine that cannot
+        evaluate (or fails) shows a level, unlabelled bar and logs the
+        failure.
         """
         if self._game.is_game_over():
             result = self._game.result()
             share = {"1-0": 1.0, "0-1": 0.0}.get(result, 0.5)
             self._view.update_evaluation(share, result)
             return
-        try:
-            score = self._engine.evaluate(self.fen)
-        except Exception as exc:
-            self._on_event("engine", f"evaluation failed: {exc}")
-            score = None
-        self._view.update_evaluation(white_share(score), score_label(score))
+        fen = self.fen
+
+        def done(score, error):
+            if self.fen != fen:
+                return
+            if error is not None:
+                self._on_event("engine", f"evaluation failed: {error}")
+                score = None
+            self._view.update_evaluation(white_share(score),
+                                         score_label(score))
+
+        self._worker(lambda: self._engine.evaluate(fen), done)
 
     def _legal(self, from_name, to_name):
         """Resolve two squares to a legal move, auto-queening promotions.
@@ -478,9 +490,12 @@ class MirrorGame:
         self._current_delay = self._draw_delay()   # fresh jitter per reply
         self._epoch += 1
         self._on_event("opponent", move.uci())
-        self._refresh_evaluation()
         if self.auto and not self._game.is_game_over():
-            return self._reply()
+            played = self._reply()             # search first, then the bar
+            if played is None:
+                self._refresh_evaluation()
+            return played
+        self._refresh_evaluation()
         self._refresh(self._turn_status())
         return None
 
@@ -617,16 +632,17 @@ class MirrorGame:
         self._game.push(chess.Move.from_uci(uci))
         self.last_move = uci
         self._on_event(source, uci)
-        self._refresh_evaluation()
         try:
             self._actuator.apply(uci, self.box, self.playing_white)
         except Exception as exc:  # mouse failures must not desync the board
             self._on_event("actuator", f"failed: {exc}")
             self._refresh(f"Played {uci} here, but could not move the mouse: "
                           f"{exc}")
+            self._refresh_evaluation()
             return uci
         self._return_pointer()
         self._refresh(f"Played {uci}. {self._turn_status()}")
+        self._refresh_evaluation()             # after the drag, not before
         return uci
 
     def _return_pointer(self):

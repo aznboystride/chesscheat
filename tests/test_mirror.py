@@ -407,9 +407,10 @@ class StrengthTests(unittest.TestCase):
 class StrengthOptionTests(unittest.TestCase):
     """Pure mapping from a rating to Stockfish's UCI options (dep-free)."""
 
-    def test_full_strength_sends_nothing(self):
+    def test_full_strength_restores_the_default(self):
         from chesscheat.assist import limit_strength_options
-        self.assertEqual(limit_strength_options(None, 1320, 3190), {})
+        self.assertEqual(limit_strength_options(None, 1320, 3190),
+                         {"UCI_LimitStrength": False})
 
     def test_rating_is_clamped_to_the_engine_range(self):
         from chesscheat.assist import limit_strength_options
@@ -786,7 +787,11 @@ class RequireTkTests(unittest.TestCase):
 
 
 class _Worker:
-    """A fake background worker: jobs run only when the test says so."""
+    """A fake background worker: jobs run only when the test says so.
+
+    Both the reply search and the evaluation-bar refresh go through it, so
+    tests drain it with ``finish_all`` and check what the engine saw.
+    """
 
     def __init__(self):
         self.jobs = []   # (fn, done)
@@ -803,6 +808,11 @@ class _Worker:
             done(None, exc)
         else:
             done(result, None)
+
+    def finish_all(self):
+        """Run every job, including those queued while finishing."""
+        while self.jobs:
+            self.finish()
 
 
 @unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
@@ -897,23 +907,34 @@ class BackgroundThinkingTests(unittest.TestCase):
                           on_event=lambda k, d: self.events.append((k, d)),
                           **kwargs)
         game.start()
+        self.worker.finish_all()              # the opening evaluation
         return game
 
     def test_reply_lands_only_when_the_worker_finishes(self):
         game = self._game(playing_white=False)
         game.submit_move("e2", "e4")
-        self.assertEqual(len(self.worker.jobs), 1)
         self.assertEqual(self.engine.seen_fens, [])     # not searched yet
         self.assertEqual(self.actuator.applied, [])
-        self.worker.finish()
+        self.worker.finish_all()
+        self.assertEqual(len(self.engine.seen_fens), 1)
         self.assertEqual([a[0] for a in self.actuator.applied], ["e7e5"])
         self.assertEqual(self.view.updates[-1][1], "e7e5")
+
+    def test_search_is_dispatched_before_the_evaluation(self):
+        game = self._game(playing_white=False)
+        evaluated = len(self.engine.evaluated)      # the opening score
+        game.submit_move("e2", "e4")
+        self.worker.finish()                  # the oldest job: the search
+        self.assertEqual(len(self.engine.seen_fens), 1)
+        self.assertEqual(len(self.engine.evaluated), evaluated)
+        self.worker.finish_all()
+        self.assertGreater(len(self.engine.evaluated), evaluated)
 
     def test_result_with_a_delay_is_committed_after_the_wait(self):
         game = self._game(playing_white=False, delay=2.0)
         game.submit_move("e2", "e4")
         self.now[0] += 1.9                                  # the search ran
-        self.worker.finish()
+        self.worker.finish_all()
         self.assertEqual(self.actuator.applied, [])
         self.assertAlmostEqual(self.scheduler.pending[0][0], 0.1)
         self.now[0] += 0.1
@@ -925,30 +946,27 @@ class BackgroundThinkingTests(unittest.TestCase):
         game.submit_move("e2", "e4")
         game.undo()                      # user takes the move back meanwhile
         self.assertEqual(game.fen.split()[0], START_FEN)
-        self.worker.finish()             # the old search completes: dropped
+        self.worker.finish_all()         # the old search completes: dropped
         self.assertEqual(self.actuator.applied, [])
         self.assertIn(("engine", "stale reply dropped"), self.events)
         game.submit_move("d2", "d4")     # re-entered: a fresh search
-        self.assertEqual(len(self.worker.jobs), 1)
-        self.worker.finish()
+        self.worker.finish_all()
+        self.assertEqual(len(self.engine.seen_fens), 2)
         self.assertEqual([a[0] for a in self.actuator.applied], ["e7e5"])
 
     def test_new_game_during_a_search_drops_its_result(self):
         game = self._game(playing_white=False)
         game.submit_move("e2", "e4")
         self.engine.move = "d2d4"
-        game.new_game(True)              # program opens: a second job
-        self.assertEqual(len(self.worker.jobs), 2)
-        self.worker.finish()             # the stale black reply
-        self.assertEqual(self.actuator.applied, [])
-        self.worker.finish()             # the opener
+        game.new_game(True)              # program opens: a second search
+        self.worker.finish_all()         # stale black reply, then the opener
         self.assertEqual([a[0] for a in self.actuator.applied], ["d2d4"])
 
     def test_pausing_before_the_result_arrives_cancels_it(self):
         game = self._game(playing_white=False)
         game.submit_move("e2", "e4")
         game.set_auto(False)
-        self.worker.finish()
+        self.worker.finish_all()
         self.assertEqual(self.actuator.applied, [])
         self.assertIn("paused", self.view.updates[-1][2])
 
@@ -957,10 +975,21 @@ class BackgroundThinkingTests(unittest.TestCase):
         game.submit_move("e2", "e4")
         game.set_auto(False)
         game.set_auto(True)              # mid-turn: would re-ask the engine
-        self.assertEqual(len(self.worker.jobs), 1)
-        self.worker.finish()
+        self.worker.finish_all()
         self.assertEqual([a[0] for a in self.actuator.applied], ["e7e5"])
         self.assertEqual(len(self.engine.seen_fens), 1)
+
+    def test_stale_evaluation_is_dropped(self):
+        game = self._game(playing_white=False)
+        self.engine.score = {"cp": 50}
+        game.set_auto(False)
+        game.submit_move("e2", "e4")     # queues an evaluation of this position
+        game.submit_move("e7", "e5")     # manual: position moves on
+        before = list(self.view.evaluations)
+        self.worker.finish()             # the first evaluation: stale
+        self.assertEqual(self.view.evaluations, before)
+        self.worker.finish_all()         # the current one lands
+        self.assertEqual(self.view.evaluations[-1][1], "+0.50")
 
     def test_engine_error_in_the_worker_becomes_a_status(self):
         class Failing(MockMoveEngine):
@@ -975,7 +1004,7 @@ class BackgroundThinkingTests(unittest.TestCase):
                           on_event=lambda k, d: events.append((k, d)))
         game.start()
         game.submit_move("e2", "e4")
-        worker.finish()
+        worker.finish_all()              # opening evaluation, then the search
         self.assertIn(("engine", "failed: engine died"), events)
         self.assertIn("Engine error: engine died", view.updates[-1][2])
         self.assertTrue(game.opponent_to_move is False)
@@ -1097,8 +1126,10 @@ class EvaluationBarTests(unittest.TestCase):
         before = len(self.view.evaluations)
         self.engine.score = {"cp": -20}
         self.engine.move = "g1f3"
-        game.submit_move("c7", "c5")       # opponent move + reply
-        self.assertEqual(len(self.view.evaluations), before + 2)
+        game.submit_move("c7", "c5")       # opponent move + instant reply
+        # Synchronous worker: the reply lands at once, so only the position
+        # after it is scored (the bar is refreshed after the search).
+        self.assertEqual(len(self.view.evaluations), before + 1)
         self.assertEqual(self.view.evaluations[-1][1], "-0.20")
         self.assertEqual(self.engine.evaluated[-1], game.fen)
 
