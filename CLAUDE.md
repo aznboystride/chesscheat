@@ -89,8 +89,9 @@ chesscheat/
   recognition/      TemplateBoardRecognizer, NumpyImageBackend, LegalMoveFilter,
                     square_scan (scan_squares)
   providers/        Gui/Prompt/Fallback SetupProvider, ScreenFrameSource
-  assist/           StockfishMoveEngine, RemoteMoveEngine, PyAutoGuiActuator,
-                    KeyTrigger, assist_move (move_pixels)
+  assist/           StockfishMoveEngine, RemoteMoveEngine, BookMoveEngine,
+                    style (STYLES, choose_move, aggression, solidity),
+                    PyAutoGuiActuator, KeyTrigger, assist_move (move_pixels)
   mirror/           MirrorGame (position_map), gui_placement, OpponentWatcher,
                     move_inference (highlighted_squares, piece_colours,
                     infer_opponent_move), evaluation (white_share,
@@ -119,7 +120,8 @@ tests/              test_board, test_recognition, test_legal_move_filter, ...
   or None; plus **concrete, optional** `set_strength(elo)` (None = full
   strength; the base is a no-op so engines that can't vary strength ignore
   it), `set_think_time(seconds)` (search budget for subsequent calls; the
-  base ignores it) and `evaluate(fen)` → `{"cp": n}` / `{"mate": n}` from
+  base ignores it), `set_style(style, margin)` (a playing character, see
+  `assist/style.py`; the base ignores it) and `evaluate(fen)` → `{"cp": n}` / `{"mate": n}` from
   **white's** perspective, or None (the base returns None: no evaluation
   bar). **This is the decision-maker interface**: `StockfishMoveEngine`
   (local binary) and `RemoteMoveEngine` (HTTP service) implement it, and
@@ -226,12 +228,23 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
 `actuator.apply(uci, box, playing_white)`, returning the UCI played.
 - `StockfishMoveEngine` — locates a binary (explicit path / `STOCKFISH_PATH` /
   `shutil.which("stockfish")`; `path` may also be a command list) at
-  construction; **one UCI process is kept alive** across calls via
-  **python-chess** (`chess.engine`, lazy): `_engine()` opens it on first
-  use and registers `close` with `atexit`; `_run(action)` closes and
-  re-raises on `chess.engine.EngineError` so a dead process is reopened by
-  the next call; `running` tells; `SimpleEngine` serialises commands from
-  several threads (a worker-thread search and an evaluation just queue).
+  construction; **one UCI process per role is kept alive** across calls
+  via **python-chess** (`chess.engine`, lazy) — `"search"` (`best_move`,
+  styled or not) and `"analysis"` (`evaluate`) — each with its own
+  `threading.Lock`: `_engine(role)` opens it on first use (under the
+  lock) and registers `close` with `atexit`; `_run(role, action)` holds
+  the lock, closes that role and re-raises on `chess.engine.EngineError`
+  so a dead process is reopened by the next call; `running` tells.
+  **Why two processes**: `SimpleEngine` is thread-safe but does *not*
+  queue — `Protocol.communicate` **cancels the command in flight** when a
+  new one arrives, so an evaluation sent to the search's process would
+  abort the search with a bare `CancelledError` (this was the empty
+  "Engine error:" the user saw: the bar's analysis, dispatched right after
+  the reply search, killed it). The locks also serialise same-role calls
+  (a stale search and a new one) and the first open (two worker threads
+  used to race to `popen`). Pinned by `test_a_search_and_an_evaluation_
+  can_run_at_the_same_time` / `test_two_searches_are_serialised_not_
+  cancelled`.
   `best_move` returns None for an invalid/finished position; `think_time`
   (default **0.3 s**, settable via `set_think_time`, floor 0.01) is the
   `Limit(time=…)`. Strength is sent as **per-call `options`** on every
@@ -257,8 +270,9 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   reads ``{"move": "e2e4"}`` (``null`` → None). `evaluate(fen)` posts
   ``{"fen": …, "evaluate": true}`` and returns the reply's ``score`` dict
   (``{"cp": n}`` / ``{"mate": n}``) or None when absent/not a dict;
-  `set_think_time` is forwarded as ``"think"`` in each best-move request
-  (null = service default).
+  `set_think_time` is forwarded as ``"think"`` and `set_style` as
+  ``"style"``/``"style_margin"`` in each best-move request (null =
+  service default).
   Stdlib ``urllib`` only (shared `_post`); raises ``RuntimeError`` on an
   unreachable service, non-2xx status, malformed JSON or (for `best_move`)
   a reply without ``move``. Tested against a real local ``http.server`` in
@@ -271,6 +285,37 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   engine (advertises `UCI_LimitStrength`/`UCI_Elo`, answers the first
   legal move with `score cp ±37` encoding whether it was limited, `crash`
   argument dies on `go`) run as `[sys.executable, path]`.
+- **Playing style** (`assist/style.py`, function-only) — Stockfish has no
+  style options, so style is applied *around* the engine. `STYLES =
+  ("best", "aggressive", "solid", "unusual")`. `_features(fen, uci)`
+  (python-chess, lazy) describes a move: capture/captured value, check,
+  castling, piece, forward ranks, into the enemy half, `near_king` (lands
+  within 4 squares of the enemy king, nearer than it started — a plain
+  "distance reduced" test fired for almost every move), develops (minor
+  piece off its home rank), king move. `aggression` = +3 check, +2
+  capture, +1 enemy half, +1 near king, −2 castling, −1 retreat;
+  `solidity` = +3 castling, +2 develops, +1 quiet, −2 king walk, −1
+  capture, −1 queen move. `eligible_moves(candidates, margin_cp)` keeps
+  the `[(uci, cp)]` lines (mover's perspective, best first) within the
+  margin of the best; `choose_move(candidates, style, fen, margin_cp=30,
+  rng)` picks: aggressive/solid = max by `(score, cp)` over the eligible
+  set, unusual = a random eligible line *other than the first* when there
+  is one, anything else = the first. `StockfishMoveEngine.set_style(style,
+  margin)` (margin in pawns, default 0.3): with a style on, `best_move`
+  runs `_styled_move` — `engine.analyse(..., multipv=STYLE_CANDIDATES=5,
+  options=strength)` in the same `think_time`, candidates from each
+  info's `pv[0]` and `score.pov(turn).score(mate_score=MATE_SCORE)`, then
+  `choose_move`. Note Stockfish applies its Elo limit when *choosing* a
+  move, so the MultiPV lines are its honest best lines regardless of the
+  strength setting: with a style on, the margin is what makes it stray.
+  `BookMoveEngine(inner, path, rng)` is a `MoveEngine` decorator over a
+  Polyglot `.bin` book (`chess.polyglot`, lazy): in book it plays
+  `weighted_choice` (or the *least* weighted entry for `"unusual"`), out
+  of book it delegates; `set_style`/`set_strength`/`set_think_time`/
+  `evaluate` forwarded, `close` closes both. `app.build_engine(engine_url,
+  think_time, style, style_margin, book)` wraps the engine when `--book`
+  is given (missing file → `FileNotFoundError`) and applies the style;
+  `--style`/`--style-margin` are CLI flags for both modes.
 - `PyAutoGuiActuator` — `move_pixels(uci, box, playing_white)` (pure: maps the
   from/to squares to screen-pixel centres via `board.parse_square`/`cell_of`)
   then `pyautogui` (lazy): moveTo(origin) → **click** (focuses the chess
@@ -363,8 +408,8 @@ on_event)` is the controller, programmed only against `MoveEngine` /
 - **Evaluation bar**: `_refresh_evaluation()` runs after every position
   change — `start`, each opponent move, each program/manual move, `undo`,
   `new_game` — **off the critical path**: the engine is asked through the
-  `worker` (so a persistent engine busy with the search just queues the
-  analysis, and the GUI never waits), and it is dispatched only *after*
+  `worker` (so the GUI never waits; the local engine analyses on its own
+  process, in parallel with the search), and it is dispatched only *after*
   `_reply` has started the search / after the actuator has dragged (with a
   synchronous worker an instantly-played reply skips the pre-reply score,
   since the post-reply one follows at once); a score for a position that
@@ -399,7 +444,7 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   is pinned by a test).
 - `gui/mirror_board.py` `MirrorBoardWindow(on_move, bottom_white, avoid_box,
   on_auto, on_delay, on_strength, on_undo, on_watch, on_new_game, on_think,
-  on_think_in_delay, …)` is the Tk `MirrorView`: drawn with
+  on_think_in_delay, on_style, …)` is the Tk `MirrorView`: drawn with
   `bottom_white = view_bottom_white(playing_white)`, unicode
   piece glyphs, click-origin then click-destination → `on_move`,
   last-move/selection highlights, status line, and a control bar (Auto-play
@@ -419,7 +464,9 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   the bar at the leading side's end); `set_orientation(bottom_white)`
   flips the board and bar for a new game as the other colour; a second
   control row holds Strength, a **Think (s)** spinbox → `on_think(seconds)`
-  and a **Think in delay** checkbox → `on_think_in_delay(enabled)`;
+  and a **Think in delay** checkbox → `on_think_in_delay(enabled)`; a
+  third row holds the **Style** menu (`STYLE_LABELS`) and a **within
+  (pawns)** spinbox, either change → `on_style(style, margin)`;
   `run_in_background(fn, done)` delegates to `gui/background_runner.py`
   `BackgroundRunner(after)` -- a daemon thread per job, outcomes queued
   and drained on the Tk loop by polling `after(25, …)` only while jobs are
@@ -603,7 +650,21 @@ time are recognised exactly.
   `RemoteMoveEngine` against a real local `http.server` (protocol incl.
   `think`, null move, 5xx, malformed, unreachable, `evaluate` posts the
   flag and reads `score` / None without one / raises on 5xx).
-  `build_parser` modes/engine-url/think-seconds.
+  `build_parser` modes/engine-url/think-seconds/style/style-margin/book;
+  `MirrorGame.set_style` forwarded with its margin and logged.
+- `test_style.py` — playing styles: `eligible_moves`/`choose_move`
+  (dep-free: margin filtering, best/unknown styles take the top line,
+  unusual avoids the top line via the injected rng and falls back when
+  alone); the heuristics on real positions (`skipUnless(chess)`: captures
+  and checks aggressive, Qh5/Bc4 towards the king, castling and
+  development solid, styles pick by character within the margin and not
+  outside it); `BookMoveEngine` over a Polyglot book written by the test
+  (`struct ">QHHI"`, `zobrist_hash`): weighted choice in book, rarest line
+  for unusual, engine consulted out of book, settings and evaluation
+  forwarded; the styled search of `StockfishMoveEngine` against the fake
+  UCI engine (now `MultiPV`-aware: first N legal moves, 10 cp apart):
+  best = first line, unusual avoids it with a wide margin and not with a
+  zero one, aggressive picks the capture among the lines.
 - `test_move_inference.py` — dep-free: `highlighted_squares` (clean board,
   both squares of a move, orientation, small noise ignored), `piece_colours`
   (classified from the model's references, sides swap for black, a moved
@@ -639,7 +700,10 @@ time are recognised exactly.
   `fixtures/fake_uci_engine.py` (`skipUnless(chess)`): one process serves
   searches and evaluations and is reused, strength is per search while
   evaluation is always full, black-to-move scores are white-relative, a
-  crashed process is dropped and reopened. A
+  crashed process is dropped and reopened, a search and an evaluation run
+  at the same time (separate processes: the search is not cancelled), and
+  concurrent searches are serialised. `MirrorGame` names a bare exception
+  (e.g. `CancelledError`) by type in the status (`_describe`). A
   `skipUnless(shutil.which("stockfish"))` case runs the real
   `StockfishMoveEngine` (legal opening move; None at game over; `evaluate`
   signed from white's perspective).

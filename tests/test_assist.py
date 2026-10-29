@@ -343,13 +343,61 @@ class PersistentEngineProcessTests(unittest.TestCase):
         first = engine.best_move(fen)
         self.assertRegex(first, r"^[a-h][1-8][a-h][1-8]$")  # a legal opener
         self.assertTrue(engine.running)
-        process = engine._process
+        process = engine._engines["search"]
         self.assertEqual(engine.evaluate(fen), {"cp": 37})
         self.assertEqual(engine.best_move(fen), first)
-        self.assertIs(engine._process, process)           # reused, not reopened
+        self.assertIs(engine._engines["search"], process)  # reused
+        self.assertIsNot(engine._engines["analysis"], process)  # own process
         engine.close()
         self.assertFalse(engine.running)
         engine.close()                                    # idempotent
+
+    def test_a_search_and_an_evaluation_can_run_at_the_same_time(self):
+        # python-chess cancels a command in flight when another arrives on
+        # the same process; with one process per role both must succeed.
+        import threading
+
+        engine = self._engine()
+        fen = board.to_full_fen(board.starting_board(), True)
+        engine.think_time = 0.3
+        results = {}
+
+        def search():
+            try:
+                results["search"] = engine.best_move(fen)
+            except BaseException as exc:   # noqa: BLE001 -- recorded
+                results["search"] = exc
+
+        def evaluate():
+            try:
+                results["eval"] = engine.evaluate(fen)
+            except BaseException as exc:   # noqa: BLE001 -- recorded
+                results["eval"] = exc
+
+        threads = [threading.Thread(target=search),
+                   threading.Thread(target=evaluate)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+        self.assertRegex(results["search"], r"^[a-h][1-8][a-h][1-8]$")
+        self.assertEqual(results["eval"], {"cp": 37})
+
+    def test_two_searches_are_serialised_not_cancelled(self):
+        import threading
+
+        engine = self._engine()
+        fen = board.to_full_fen(board.starting_board(), True)
+        results = []
+        threads = [threading.Thread(
+            target=lambda: results.append(engine.best_move(fen)))
+            for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all(isinstance(r, str) for r in results))
 
     def test_strength_is_per_search_and_evaluation_is_always_full(self):
         engine = self._engine()

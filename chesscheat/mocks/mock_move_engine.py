@@ -13,6 +13,7 @@ class MockMoveEngine(MoveEngine):
         evaluated: FENs passed to ``evaluate``, in order.
         strengths: Values passed to ``set_strength``, in order.
         think_times: Values passed to ``set_think_time``, in order.
+        styles: ``(style, margin)`` pairs passed to ``set_style``, in order.
     """
 
     def __init__(self, move="e2e4"):
@@ -27,6 +28,16 @@ class MockMoveEngine(MoveEngine):
         self.evaluated = []
         self.strengths = []
         self.think_times = []
+        self.styles = []
+
+    def set_style(self, style, margin=None):
+        """Record a style request.
+
+        Args:
+            style: The style name; appended with ``margin`` to ``styles``.
+            margin: The margin in pawns, or None.
+        """
+        self.styles.append((style, margin))
 
     def set_think_time(self, seconds):
         """Record a search-time request.

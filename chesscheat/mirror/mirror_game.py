@@ -7,6 +7,19 @@ from chesscheat import board
 from chesscheat.mirror.evaluation import score_label, white_share
 
 
+def _describe(error):
+    """Name an exception for a status line, even one with no message.
+
+    Args:
+        error: The exception.
+
+    Returns:
+        Its message, or its type name when the message is empty (a
+        cancelled future, for instance, says nothing by itself).
+    """
+    return str(error) or type(error).__name__
+
+
 def _run_now(fn, done):
     """The default worker: run ``fn`` here and report to ``done`` at once.
 
@@ -108,6 +121,7 @@ class MirrorGame:
         delay_range: ``(min, max)`` seconds the per-reply delay is drawn from.
         delay: The delay in force for the current/next reply (read-only).
         elo: The strength last requested from the engine, or None.
+        style: The playing style last requested from the engine.
         think_time: Base engine search time per reply, in seconds.
         think_in_delay: Whether a waiting reply may think for the wait.
         max_think: Cap on the search time when thinking in the delay.
@@ -157,6 +171,7 @@ class MirrorGame:
         self.last_move = None
         self.auto = auto
         self.elo = None
+        self.style = "best"
         self._engine = engine
         self._actuator = actuator
         self._view = view
@@ -369,6 +384,20 @@ class MirrorGame:
         self._engine.set_strength(elo)
         self._on_event("strength", "full" if elo is None else f"{elo} Elo")
 
+    def set_style(self, style, margin=None):
+        """Change the engine's playing style for subsequent replies.
+
+        Args:
+            style: One of ``chesscheat.assist.style.STYLES`` (``"best"`` =
+                plain best move).
+            margin: Pawns below its best line the engine may stray to
+                express the style, or None to keep the engine's current.
+        """
+        self.style = style
+        self._engine.set_style(style, margin)
+        self._on_event("style", style if margin is None
+                       else f"{style} (within {margin:g} pawns)")
+
     # -- play --------------------------------------------------------------
 
     def start(self):
@@ -429,7 +458,8 @@ class MirrorGame:
             if self.fen != fen:
                 return
             if error is not None:
-                self._on_event("engine", f"evaluation failed: {error}")
+                self._on_event("engine",
+                               f"evaluation failed: {_describe(error)}")
                 score = None
             self._view.update_evaluation(white_share(score),
                                          score_label(score))
@@ -577,8 +607,9 @@ class MirrorGame:
                 self._on_event("engine", "stale reply dropped")
                 return
             if error is not None:   # engine problems must not kill the GUI
-                self._on_event("engine", f"failed: {error}")
-                self._refresh(f"Engine error: {error}")
+                detail = _describe(error)
+                self._on_event("engine", f"failed: {detail}")
+                self._refresh(f"Engine error: {detail}")
                 return
             if not uci:
                 self._refresh("The engine has no move (game over?).")

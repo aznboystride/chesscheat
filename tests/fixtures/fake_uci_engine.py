@@ -6,7 +6,9 @@ Speaks just enough of the protocol for python-chess: ``uci`` (advertising
 Every search answers with the first legal move and an ``info score cp``
 that encodes what it was told: ``+37`` at full strength, ``-37`` while
 strength is limited (so a client can check which it asked for), from the
-side to move's point of view as UCI requires. ``go`` with ``crash`` in the
+side to move's point of view as UCI requires. With ``MultiPV`` set to N
+it reports the first N legal moves as lines 1..N, each 10 centipawns
+worse than the one before. ``go`` with ``crash`` in the
 command line arguments kills the process instead, to test recovery.
 
 Run as ``python3 fake_uci_engine.py [crash]``.
@@ -26,6 +28,7 @@ def main(argv):
     """
     board = chess.Board()
     limited = False
+    multipv = 1
     crash = "crash" in argv
     out = sys.stdout
 
@@ -42,12 +45,15 @@ def main(argv):
             say("id name FakeUCI")
             say("option name UCI_LimitStrength type check default false")
             say("option name UCI_Elo type spin default 1320 min 1320 max 3190")
+            say("option name MultiPV type spin default 1 min 1 max 500")
             say("uciok")
         elif command == "isready":
             say("readyok")
         elif command == "setoption":
             if parts[2] == "UCI_LimitStrength":
                 limited = parts[4] == "true"
+            elif parts[2] == "MultiPV":
+                multipv = int(parts[4])
         elif command == "ucinewgame":
             board = chess.Board()
         elif command == "position":
@@ -63,9 +69,12 @@ def main(argv):
         elif command == "go":
             if crash:
                 sys.exit(3)
-            move = next(iter(board.legal_moves), None)
+            moves = list(board.legal_moves)[:multipv]
             cp = -37 if limited else 37
-            say(f"info depth 1 score cp {cp} pv {move.uci() if move else ''}")
+            for rank, move in enumerate(moves, start=1):
+                say(f"info depth 1 multipv {rank} score cp "
+                    f"{cp - 10 * (rank - 1)} pv {move.uci()}")
+            move = moves[0] if moves else None
             say(f"bestmove {move.uci() if move else '(none)'}")
         elif command == "quit":
             return

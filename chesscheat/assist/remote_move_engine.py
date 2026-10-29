@@ -14,9 +14,12 @@ class RemoteMoveEngine(MoveEngine):
     cloud function). The wire format is deliberately minimal JSON:
 
     - request: ``POST <url>`` with body ``{"fen": "<full FEN>", "elo": N,
-      "think": S}`` where ``elo`` is the requested strength or ``null`` for
-      full strength and ``think`` the search time in seconds or ``null``
-      for the service's own default (it may ignore both);
+      "think": S, "style": "best", "style_margin": M}`` where ``elo`` is
+      the requested strength or ``null`` for full strength, ``think`` the
+      search time in seconds or ``null`` for the service's own default,
+      ``style`` one of ``chesscheat.assist.style.STYLES`` and
+      ``style_margin`` the pawns it may stray from its best line (it may
+      ignore any of them);
     - response: ``{"move": "e2e4"}`` (UCI), or ``{"move": null}`` for no move.
     - evaluation: ``POST <url>`` with ``{"fen": "<full FEN>", "evaluate":
       true}``; the response may carry ``"score": {"cp": N}`` or
@@ -32,6 +35,9 @@ class RemoteMoveEngine(MoveEngine):
         elo: Requested strength from ``set_strength``, or None.
         think_time: Requested search seconds from ``set_think_time``, or
             None.
+        style: Requested style from ``set_style`` (``"best"`` by default).
+        style_margin: Requested margin in pawns, or None for the service's
+            default.
     """
 
     def __init__(self, url, timeout=30.0):
@@ -45,6 +51,19 @@ class RemoteMoveEngine(MoveEngine):
         self.timeout = timeout
         self.elo = None
         self.think_time = None
+        self.style = "best"
+        self.style_margin = None
+
+    def set_style(self, style, margin=None):
+        """Forward a style request to the service with each query.
+
+        Args:
+            style: The style name.
+            margin: Pawns the service may stray from its best line, or None.
+        """
+        self.style = style
+        if margin is not None:
+            self.style_margin = float(margin)
 
     def set_think_time(self, seconds):
         """Forward a search-time request to the service with each query.
@@ -77,7 +96,8 @@ class RemoteMoveEngine(MoveEngine):
                 status, or replies with malformed JSON.
         """
         reply = self._post({"fen": fen, "elo": self.elo,
-                            "think": self.think_time})
+                            "think": self.think_time, "style": self.style,
+                            "style_margin": self.style_margin})
         if "move" not in reply:
             raise RuntimeError(f"remote engine at {self.url} replied "
                                f"without a 'move' field: {reply!r}")

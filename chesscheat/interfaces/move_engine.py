@@ -27,6 +27,21 @@ class MoveEngine(ABC):
             position).
         """
 
+    def set_style(self, style, margin=None):
+        """Ask the engine to play with a character, not just its best move.
+
+        Optional: the default ignores it. See
+        ``chesscheat.assist.style.STYLES`` for the names (``"best"`` means
+        no style).
+
+        Args:
+            style: The style name.
+            margin: How far below its best line, in pawns, the engine may
+                stray to express the style; None keeps the engine's
+                default.
+        """
+        return None
+
     def set_think_time(self, seconds):
         """Set how long the engine may search for the next ``best_move``.
 

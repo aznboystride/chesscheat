@@ -185,7 +185,8 @@ SSIM_THRESHOLD = 0.6
 ASSIST_KEY = "a"
 
 
-def build_engine(engine_url=None, think_time=None):
+def build_engine(engine_url=None, think_time=None, style=None,
+                 style_margin=None, book=None):
     """Pick the decision maker behind the ``MoveEngine`` interface.
 
     Args:
@@ -194,24 +195,40 @@ def build_engine(engine_url=None, think_time=None):
             set, a local Stockfish binary is used.
         think_time: Optional search seconds per move, applied through
             ``set_think_time``; None keeps the engine's default.
+        style: Optional playing style (``chesscheat.assist.STYLES``),
+            applied through ``set_style``.
+        style_margin: Optional pawns the engine may stray from its best
+            line to express the style.
+        book: Optional path to a Polyglot ``.bin`` opening book; the engine
+            is wrapped in a ``BookMoveEngine`` that plays from it while the
+            position is in the book.
 
     Returns:
-        A ``RemoteMoveEngine`` for a URL, else a ``StockfishMoveEngine``.
+        A ``RemoteMoveEngine`` for a URL, else a ``StockfishMoveEngine``;
+        wrapped in a ``BookMoveEngine`` when ``book`` is given.
 
     Raises:
         FileNotFoundError: If no URL is given and no Stockfish binary is
-            found.
+            found, or the book file does not exist.
     """
-    from chesscheat.assist import StockfishMoveEngine, RemoteMoveEngine
+    from chesscheat.assist import (StockfishMoveEngine, RemoteMoveEngine,
+                                   BookMoveEngine)
 
     url = engine_url or os.environ.get("CHESSCHEAT_ENGINE_URL")
     engine = RemoteMoveEngine(url) if url else StockfishMoveEngine()
+    if book:
+        if not os.path.isfile(book):
+            raise FileNotFoundError(f"Opening book not found: {book}")
+        engine = BookMoveEngine(engine, book)
     if think_time is not None:
         engine.set_think_time(think_time)
+    if style is not None or style_margin is not None:
+        engine.set_style(style or "best", style_margin)
     return engine
 
 
-def _build_assist(on_event, engine_url=None, think_time=None):
+def _build_assist(on_event, engine_url=None, think_time=None,
+                  engine_options=None):
     """Try to wire the move-assist (engine + mouse + keybind).
 
     The assist needs a decision maker (local Stockfish, or a remote service
@@ -223,6 +240,8 @@ def _build_assist(on_event, engine_url=None, think_time=None):
         on_event: The console activity callback, used to log assist actions.
         engine_url: Optional remote engine URL (see ``build_engine``).
         think_time: Optional engine search seconds per move.
+        engine_options: Optional extra keyword arguments for
+            ``build_engine`` (style, style_margin, book).
 
     Returns:
         A ``(trigger, on_trigger)`` pair for ``run``; ``trigger`` is None
@@ -238,7 +257,7 @@ def _build_assist(on_event, engine_url=None, think_time=None):
     try:
         import pyautogui  # noqa: F401  -- probe availability early
         import pynput  # noqa: F401
-        engine = build_engine(engine_url, think_time)
+        engine = build_engine(engine_url, think_time, **(engine_options or {}))
         actuator = PyAutoGuiActuator()
         trigger = KeyTrigger(ASSIST_KEY)
     except (ImportError, FileNotFoundError) as exc:
@@ -270,12 +289,14 @@ def _build_assist(on_event, engine_url=None, think_time=None):
     return trigger, on_trigger
 
 
-def reader_main(engine_url=None, think_time=None):
+def reader_main(engine_url=None, think_time=None, engine_options=None):
     """Wire the real implementations and run the live reader.
 
     Args:
         engine_url: Optional remote engine URL for the move assist.
         think_time: Optional engine search seconds per assisted move.
+        engine_options: Optional extra ``build_engine`` keyword arguments
+            (style, style_margin, book).
     """
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
                                       FallbackSetupProvider, ScreenFrameSource)
@@ -324,7 +345,8 @@ def reader_main(engine_url=None, think_time=None):
         seen["unknown"] = unknown
         console_frame(image)
 
-    trigger, on_trigger = _build_assist(on_event, engine_url, think_time)
+    trigger, on_trigger = _build_assist(on_event, engine_url, think_time,
+                                        engine_options)
 
     run(setup, ScreenFrameSource, recognizer,
         on_board=on_board, on_frame=on_frame,
@@ -353,7 +375,8 @@ def _require_tk():
             f"python-tk@{sys.version_info.major}.{sys.version_info.minor}")
 
 
-def mirror_main(engine_url=None, think_time=0.3):
+def mirror_main(engine_url=None, think_time=0.3, style="best",
+                style_margin=0.3, book=None):
     """Run mirror mode: a GUI where the user plays the opponent's moves.
 
     Asks for the user's side and the real chess app's board box, then opens
@@ -368,6 +391,9 @@ def mirror_main(engine_url=None, think_time=0.3):
         engine_url: Optional remote engine URL (see ``build_engine``).
         think_time: Initial engine search seconds per reply (adjustable in
             the window).
+        style: Initial playing style (adjustable in the window).
+        style_margin: Initial style margin in pawns (adjustable too).
+        book: Optional Polyglot opening book path.
     """
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
                                       FallbackSetupProvider)
@@ -390,7 +416,8 @@ def mirror_main(engine_url=None, think_time=0.3):
               "Accessibility).\n")
 
     try:
-        engine = build_engine(engine_url)
+        engine = build_engine(engine_url, think_time, style, style_margin,
+                              book)
     except FileNotFoundError as exc:
         raise SystemExit(f"No decision maker available: {exc}")
 
@@ -414,7 +441,8 @@ def mirror_main(engine_url=None, think_time=0.3):
         on_new_game=lambda white: mirror.new_game(white),
         on_think=lambda seconds: mirror.set_think_time(seconds),
         on_think_in_delay=lambda enabled: mirror.set_think_in_delay(enabled),
-        think=think_time)
+        on_style=lambda name, pawns: mirror.set_style(name, pawns),
+        think=think_time, style=style, style_margin=style_margin)
     mirror = MirrorGame(playing_white, box, engine, PyAutoGuiActuator(),
                         view, on_event=log, schedule=view.schedule,
                         think_time=think_time,
@@ -424,10 +452,11 @@ def mirror_main(engine_url=None, think_time=0.3):
     log("mode", f"you play {'white' if playing_white else 'black'}; "
                 f"{'black' if playing_white else 'white'}'s moves are read "
                 "from the app's highlight (Watch app) or entered by you. "
-                "Toggle Auto-play, the reply delay and the strength in the "
-                "window at any time; Undo takes back a mis-entered opponent "
-                "move and the reply to it; New game starts over as either "
-                "colour on the same board.")
+                "Toggle Auto-play, the reply delay, the strength and the "
+                "style in the window at any time; Undo takes back a "
+                "mis-entered opponent move and the reply to it; New game "
+                "starts over as either colour on the same board.")
+    mirror.style = style
     mirror.start()
     watcher.start()
     view.run()
@@ -457,6 +486,21 @@ def build_parser():
         help="engine search time per move in seconds (default 0.3); in "
              "mirror mode adjustable in the window, and extended to the "
              "reply delay while 'Think in delay' is on.")
+    parser.add_argument(
+        "--style", choices=("best", "aggressive", "solid", "unusual"),
+        default="best",
+        help="playing style: 'best' (default) plays the engine's first "
+             "choice; the others pick among its top lines within "
+             "--style-margin pawns of the best (adjustable in the mirror "
+             "window).")
+    parser.add_argument(
+        "--style-margin", type=float, default=0.3,
+        help="pawns a styled pick may be below the engine's best line "
+             "(default 0.3).")
+    parser.add_argument(
+        "--book", default=None, metavar="FILE",
+        help="a Polyglot .bin opening book to play from while in book "
+             "(the 'unusual' style picks its rarest line).")
     return parser
 
 
@@ -468,9 +512,12 @@ def main(argv=None):
     """
     args = build_parser().parse_args(argv)
     if args.mode == "mirror":
-        mirror_main(args.engine_url, args.think_seconds)
+        mirror_main(args.engine_url, args.think_seconds, args.style,
+                    args.style_margin, args.book)
     else:
-        reader_main(args.engine_url, args.think_seconds)
+        reader_main(args.engine_url, args.think_seconds,
+                    {"style": args.style, "style_margin": args.style_margin,
+                     "book": args.book})
 
 
 if __name__ == "__main__":
