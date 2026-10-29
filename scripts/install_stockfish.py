@@ -33,6 +33,12 @@ RELEASES_API = "https://api.github.com/repos/official-stockfish/Stockfish/releas
 def asset_candidates(system, machine):
     """Return release-asset name fragments to try, most preferred first.
 
+    Since Stockfish 19 each platform ships one **universal** build that picks
+    the best code path for the CPU at run time (``stockfish-macos-universal``,
+    ``stockfish-linux-x86-64-universal`` ...). Those come first; the
+    pre-19 per-CPU names (``macos-m1-apple-silicon``, ``ubuntu-x86-64-avx2``
+    ...) follow as fallbacks so a pinned older release still installs.
+
     Args:
         system: ``platform.system()`` value, e.g. ``"Darwin"``, ``"Linux"``.
         machine: ``platform.machine()`` value, e.g. ``"arm64"``, ``"x86_64"``.
@@ -44,23 +50,27 @@ def asset_candidates(system, machine):
     system = system.lower()
     machine = machine.lower()
     if system == "darwin":
+        # One universal build covers Apple Silicon (M1..M4) and Intel Macs.
         if machine in ("arm64", "aarch64"):
-            # One Apple Silicon build covers M1..M4.
-            return ["macos-m1-apple-silicon"]
+            return ["macos-universal", "macos-m1-apple-silicon"]
         if machine in ("x86_64", "amd64"):
-            return ["macos-x86-64-avx2", "macos-x86-64-sse41-popcnt",
-                    "macos-x86-64"]
+            return ["macos-universal", "macos-x86-64-avx2",
+                    "macos-x86-64-sse41-popcnt", "macos-x86-64"]
     if system == "linux":
         if machine in ("x86_64", "amd64"):
-            return ["ubuntu-x86-64-avx2", "ubuntu-x86-64-sse41-popcnt",
-                    "ubuntu-x86-64"]
+            return ["linux-x86-64-universal", "ubuntu-x86-64-avx2",
+                    "ubuntu-x86-64-sse41-popcnt", "ubuntu-x86-64"]
         if machine in ("aarch64", "arm64"):
-            return ["ubuntu-aarch64", "android-armv8"]
+            return ["linux-arm64-universal", "ubuntu-aarch64",
+                    "android-armv8"]
     return []
 
 
+ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar")
+
+
 def select_asset(asset_names, system, machine):
-    """Choose the best-matching ``.tar`` asset name for a platform.
+    """Choose the best-matching tar asset name for a platform.
 
     Args:
         asset_names: Asset file names available in a release.
@@ -68,11 +78,13 @@ def select_asset(asset_names, system, machine):
         machine: ``platform.machine()`` value.
 
     Returns:
-        The chosen asset name, or None if none match this platform.
+        The chosen asset name (a ``.tar``, ``.tar.gz`` or ``.tgz``), or None
+        if none match this platform.
     """
     for fragment in asset_candidates(system, machine):
         matches = sorted(name for name in asset_names
-                         if fragment in name and name.endswith(".tar"))
+                         if fragment in name
+                         and name.endswith(ARCHIVE_SUFFIXES))
         if matches:
             return matches[0]
     return None
@@ -114,17 +126,17 @@ def _download(url, dest_path):
 
 
 def _safe_extract(tar_path, dest_dir):
-    """Extract a tar archive, refusing members that escape ``dest_dir``.
+    """Extract a tar archive (plain or gzip), refusing members that escape.
 
     Args:
-        tar_path: Path to the ``.tar`` file.
+        tar_path: Path to the ``.tar`` / ``.tar.gz`` file.
         dest_dir: Directory to extract into.
 
     Raises:
         ValueError: If a member would extract outside ``dest_dir``.
     """
     dest_dir = os.path.realpath(dest_dir)
-    with tarfile.open(tar_path) as tar:
+    with tarfile.open(tar_path, "r:*") as tar:
         for member in tar.getmembers():
             target = os.path.realpath(os.path.join(dest_dir, member.name))
             if target != dest_dir and not target.startswith(dest_dir + os.sep):
@@ -136,7 +148,8 @@ def _find_binary(root):
     """Return the extracted Stockfish executable (the largest regular file).
 
     The Stockfish tarball holds the binary (tens of MB, embedded NNUE) beside
-    small text files, so the largest file is the engine.
+    small text files, so the largest file is the engine. ``root`` must hold
+    only the extracted tree -- never the downloaded archive itself.
 
     Args:
         root: Directory the archive was extracted into.
@@ -208,10 +221,12 @@ def install(dest_dir, version=None, force=False):
     with tempfile.TemporaryDirectory() as work:
         tar_path = os.path.join(work, asset)
         _download(assets[asset], tar_path)
-        _safe_extract(tar_path, work)
-        binary = _find_binary(os.path.join(work, "stockfish")) \
-            if os.path.isdir(os.path.join(work, "stockfish")) \
-            else _find_binary(work)
+        # Extract into a subfolder so the search for the binary can never
+        # pick up the downloaded archive itself.
+        extracted = os.path.join(work, "extracted")
+        os.makedirs(extracted)
+        _safe_extract(tar_path, extracted)
+        binary = _find_binary(extracted)
         if binary is None:
             raise RuntimeError("archive contained no binary")
         shutil.copy2(binary, target)
