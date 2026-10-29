@@ -245,8 +245,13 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   ``http.server`` in `test_mirror.py`.
 - `PyAutoGuiActuator` — `move_pixels(uci, box, playing_white)` (pure: maps the
   from/to squares to screen-pixel centres via `board.parse_square`/`cell_of`)
-  then `pyautogui` (lazy) moveTo → mouseDown → moveTo(duration) → mouseUp.
-  Promotion suffix ignored (site prompt not handled).
+  then `pyautogui` (lazy): moveTo(origin) → **click** (focuses the chess
+  app's window; on macOS the first click on an inactive window only
+  activates it, so a cold drag could be swallowed) → sleep(`focus_pause`)
+  → mouseDown → moveTo(dest, `duration`) → mouseUp. The piece gets two
+  presses (focus click + the drag's mouse-down). The exact call sequence is
+  pinned in `test_assist.py` with a fake `pyautogui` module. Promotion
+  suffix ignored (site prompt not handled).
 - `KeyTrigger(key="a")` — a global `pynput` (lazy) keyboard listener in a
   thread; a matching press sets a `threading.Event` that `poll` edge-consumes.
   On macOS a global listener needs **Input Monitoring** permission; without it

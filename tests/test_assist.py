@@ -88,6 +88,64 @@ class MovePixelsTests(unittest.TestCase):
         self.assertTrue(100 < fx < 200 and 900 < fy < 1000)  # a1 bottom-left
 
 
+class ActuatorSequenceTests(unittest.TestCase):
+    """The real actuator focuses the window with a click, then drags.
+
+    ``pyautogui`` is replaced by a recording fake, so the exact mouse
+    sequence is pinned without the library or a display.
+    """
+
+    class _FakePyAutoGui:
+        def __init__(self):
+            self.calls = []
+
+        def moveTo(self, x, y, duration=None):
+            self.calls.append(("moveTo", x, y, duration))
+
+        def click(self):
+            self.calls.append(("click",))
+
+        def mouseDown(self, button):
+            self.calls.append(("mouseDown", button))
+
+        def mouseUp(self, button):
+            self.calls.append(("mouseUp", button))
+
+    def test_click_to_focus_then_drag(self):
+        from unittest import mock
+        from chesscheat.assist import PyAutoGuiActuator
+
+        fake = self._FakePyAutoGui()
+        actuator = PyAutoGuiActuator(duration=0.3, focus_pause=0)
+        box = (100, 200, 900, 1000)
+        with mock.patch.dict("sys.modules", {"pyautogui": fake}):
+            actuator.apply("e2e4", box, True)
+
+        (from_x, from_y), (to_x, to_y) = move_pixels("e2e4", box, True)
+        self.assertEqual(fake.calls, [
+            ("moveTo", from_x, from_y, None),   # go to the piece
+            ("click",),                         # focus the app window
+            ("mouseDown", "left"),              # second press starts the drag
+            ("moveTo", to_x, to_y, 0.3),        # travel to the destination
+            ("mouseUp", "left"),                # drop the piece
+        ])
+
+    def test_focus_pause_is_waited(self):
+        from unittest import mock
+        from chesscheat.assist import PyAutoGuiActuator
+
+        fake = self._FakePyAutoGui()
+        waited = []
+        with mock.patch.dict("sys.modules", {"pyautogui": fake}), \
+                mock.patch("time.sleep", side_effect=waited.append):
+            PyAutoGuiActuator(focus_pause=0.15).apply(
+                "e2e4", (0, 0, 800, 800), True)
+        self.assertEqual(waited, [0.15])
+        # The pause sits between the focus click and the drag's mouse-down.
+        names = [c[0] for c in fake.calls]
+        self.assertEqual(names.index("click") + 1, names.index("mouseDown"))
+
+
 class AssistMoveTests(unittest.TestCase):
     def test_builds_fen_with_side_to_move_and_plays(self):
         engine = MockMoveEngine("e2e4")
