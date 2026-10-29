@@ -26,9 +26,9 @@ class MirrorBoardWindow(MirrorView):
     status line says whose turn it is.
 
     A control bar under the board exposes the runtime settings -- an
-    **Auto-play** toggle, a minimum **reply delay** in seconds, and the
-    engine **strength** -- each reported through its own callback the moment
-    it changes. ``schedule`` defers work on the Tk event loop so a delayed
+    **Auto-play** toggle, a minimum **reply delay** in seconds, the engine
+    **strength**, and an **Undo** button that takes back the last opponent
+    move and the reply to it -- each reported through its own callback. ``schedule`` defers work on the Tk event loop so a delayed
     reply never freezes the window.
 
     Driven by ``run`` (Tk mainloop); redrawn through ``update``. tkinter is
@@ -40,7 +40,8 @@ class MirrorBoardWindow(MirrorView):
 
     def __init__(self, on_move, bottom_white, avoid_box=None, cell=64,
                  title="chesscheat mirror board", on_auto=None, on_delay=None,
-                 on_strength=None, auto=True, delay=0.0, elo=None):
+                 on_strength=None, on_undo=None, auto=True, delay=0.0,
+                 elo=None):
         """Create the window.
 
         Args:
@@ -57,6 +58,8 @@ class MirrorBoardWindow(MirrorView):
             on_auto: Callback ``(enabled)`` when the auto-play toggle changes.
             on_delay: Callback ``(seconds)`` when the reply delay changes.
             on_strength: Callback ``(elo_or_None)`` when the strength changes.
+            on_undo: Callback ``()`` when the Undo button is pressed (take
+                back the last opponent move and the reply to it).
             auto: Initial state of the auto-play toggle.
             delay: Initial reply delay shown, in seconds.
             elo: Initial strength shown (None = full strength).
@@ -88,18 +91,19 @@ class MirrorBoardWindow(MirrorView):
         self._status = tk.Label(self._root, text="", anchor="w",
                                 font=("Helvetica", 12), padx=8, pady=6)
         self._status.pack(fill="x")
-        self._build_controls(tk, on_auto, on_delay, on_strength,
+        self._build_controls(tk, on_auto, on_delay, on_strength, on_undo,
                              auto, delay, elo)
 
-    def _build_controls(self, tk, on_auto, on_delay, on_strength,
+    def _build_controls(self, tk, on_auto, on_delay, on_strength, on_undo,
                         auto, delay, elo):
-        """Lay out the auto-play, delay and strength controls.
+        """Lay out the auto-play, delay, strength and undo controls.
 
         Args:
             tk: The imported ``tkinter`` module.
             on_auto: Auto-play toggle callback (or None).
             on_delay: Delay change callback (or None).
             on_strength: Strength change callback (or None).
+            on_undo: Undo button callback (or None).
             auto: Initial toggle state.
             delay: Initial delay in seconds.
             elo: Initial strength (None = full).
@@ -144,6 +148,9 @@ class MirrorBoardWindow(MirrorView):
 
         tk.OptionMenu(bar, self._strength_var, *labels,
                       command=strength_changed).pack(side="left")
+
+        tk.Button(bar, text="Undo", command=lambda: on_undo and on_undo()
+                  ).pack(side="right")
 
     def schedule(self, seconds, fn):
         """Run ``fn`` after ``seconds`` on the Tk event loop (non-blocking).
