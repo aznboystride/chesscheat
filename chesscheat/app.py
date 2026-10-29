@@ -351,9 +351,11 @@ def mirror_main(engine_url=None):
 
     Asks for the user's side and the real chess app's board box, then opens
     a mirror board with the same orientation as the real app (the user's
-    side at the bottom). Each opponent move the user enters is answered by
-    the engine, and the reply is played on the mirror board and -- by
-    dragging the mouse over the box -- in the real app.
+    side at the bottom). Each opponent move -- entered by the user, or read
+    off the real app's last-move highlight by an ``OpponentWatcher`` while
+    "Watch app" is on -- is answered by the engine, and the reply is played
+    on the mirror board and -- by dragging the mouse over the box -- in the
+    real app.
 
     Args:
         engine_url: Optional remote engine URL (see ``build_engine``).
@@ -361,15 +363,18 @@ def mirror_main(engine_url=None):
     from chesscheat.providers import (GuiSetupProvider, PromptSetupProvider,
                                       FallbackSetupProvider)
     from chesscheat.assist import PyAutoGuiActuator
-    from chesscheat.mirror import MirrorGame, view_bottom_white
+    from chesscheat.mirror import (MirrorGame, OpponentWatcher,
+                                   view_bottom_white)
+    from chesscheat.providers import ScreenFrameSource
     from chesscheat.gui import MirrorBoardWindow
 
     print("=== Mirror Mode ===")
     _require_tk()
     print("Pick your side, then click the real board's corners. A mirror "
-          "board opens, oriented\nlike the real app: copy each opponent "
-          "move onto it and the program answers there\nand in the real "
-          "app.\n")
+          "board opens, oriented\nlike the real app: the opponent's moves "
+          "are read off the app's last-move highlight\n(or copy them onto "
+          "the board yourself) and the program answers there and in the\n"
+          "real app.\n")
     if sys.platform == "darwin":
         print("Note (macOS): moving the mouse needs Accessibility permission "
               "for your terminal\n(System Settings → Privacy & Security → "
@@ -395,15 +400,20 @@ def mirror_main(engine_url=None):
         on_auto=lambda enabled: mirror.set_auto(enabled),
         on_delay=lambda lo, hi: mirror.set_delay_range(lo, hi),
         on_strength=lambda elo: mirror.set_strength(elo),
-        on_undo=lambda: mirror.undo())
+        on_undo=lambda: mirror.undo(),
+        on_watch=lambda enabled: watcher.set_enabled(enabled))
     mirror = MirrorGame(playing_white, box, engine, PyAutoGuiActuator(),
                         view, on_event=log, schedule=view.schedule)
+    watcher = OpponentWatcher(mirror, ScreenFrameSource(box).grab,
+                              view.schedule, on_event=log)
     log("mode", f"you play {'white' if playing_white else 'black'}; "
-                f"enter {'black' if playing_white else 'white'}'s moves. "
+                f"{'black' if playing_white else 'white'}'s moves are read "
+                "from the app's highlight (Watch app) or entered by you. "
                 "Toggle Auto-play, the reply delay and the strength in the "
                 "window at any time; Undo takes back a mis-entered opponent "
                 "move and the reply to it.")
     mirror.start()
+    watcher.start()
     view.run()
 
 
