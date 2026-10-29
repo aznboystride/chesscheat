@@ -1,4 +1,20 @@
-"""Window placement for the mirror GUI: keep it off the real board."""
+"""Window placement and orientation for the mirror GUI."""
+
+
+def view_bottom_white(playing_white):
+    """Decide which colour sits at the bottom of the mirror board.
+
+    The mirror board uses the **same orientation as the real chess app**:
+    the user's own side at the bottom. That way the two boards read
+    identically and an opponent move is copied square-for-square.
+
+    Args:
+        playing_white: True if the user plays white in the real app.
+
+    Returns:
+        True to draw white at the bottom, False for black.
+    """
+    return playing_white
 
 
 def gui_placement(box, screen_w, screen_h, win_w, win_h, gap=24):

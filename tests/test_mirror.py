@@ -22,12 +22,22 @@ from chesscheat import board
 from chesscheat.app import build_parser
 from chesscheat.assist import RemoteMoveEngine
 from chesscheat.interfaces import MirrorView, MoveEngine
-from chesscheat.mirror import gui_placement, MirrorGame, position_map
+from chesscheat.mirror import (gui_placement, MirrorGame, position_map,
+                               view_bottom_white)
 from chesscheat.mocks import (MockMoveEngine, MockMoveActuator,
                               MockMirrorView)
 
 START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
 BOX = (100, 100, 900, 900)
+
+
+class OrientationTests(unittest.TestCase):
+    """The mirror board is oriented like the real app: the user's side at
+    the bottom (white at the bottom when playing white, and vice versa)."""
+
+    def test_matches_the_real_app(self):
+        self.assertTrue(view_bottom_white(True))
+        self.assertFalse(view_bottom_white(False))
 
 
 class PlacementTests(unittest.TestCase):

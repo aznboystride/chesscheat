@@ -18,11 +18,12 @@ STRENGTHS = (("Full strength", None), ("2800", 2800), ("2500", 2500),
 class MirrorBoardWindow(MirrorView):
     """A tkinter board the user enters the opponent's moves on.
 
-    The board is drawn from the **opponent's** perspective (their side at the
-    bottom) so mimicking their moves feels natural. The user clicks the
-    origin square, then the destination; the pair is handed to ``on_move``
-    (the controller validates it). The last move played is highlighted and
-    a status line says whose turn it is.
+    Drawn in the **same orientation as the real chess app** -- the user's
+    own side at the bottom -- so the two boards read identically and an
+    opponent move is copied square-for-square. The user clicks the origin
+    square, then the destination; the pair is handed to ``on_move`` (the
+    controller validates it). The last move played is highlighted and a
+    status line says whose turn it is.
 
     A control bar under the board exposes the runtime settings -- an
     **Auto-play** toggle, a minimum **reply delay** in seconds, and the
@@ -45,8 +46,8 @@ class MirrorBoardWindow(MirrorView):
         Args:
             on_move: Callback ``(from_square, to_square)`` in algebraic
                 notation, invoked when the user has clicked two squares.
-            bottom_white: True to draw white at the bottom (the opponent is
-                white), False for black at the bottom.
+            bottom_white: True to draw white at the bottom, False for black;
+                pass the user's side so the board matches the real app.
             avoid_box: Optional ``(x1, y1, x2, y2)`` screen region the
                 window must not cover -- the real chess app's board, where
                 the program drags the mouse. Placed via

@@ -298,10 +298,13 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   failure leaves the GUI move standing so the boards stay in sync.
 - `gui_placement(box, screen_w, screen_h, win_w, win_h)` (pure) positions the
   GUI right/left/below/above the real board — never on top of it, since the
-  mouse drags land there.
+  mouse drags land there. `view_bottom_white(playing_white)` (pure) fixes the
+  orientation: **the same as the real app**, the user's side at the bottom
+  (this requirement flipped once — it used to be the opponent's view — and
+  is pinned by a test).
 - `gui/mirror_board.py` `MirrorBoardWindow(on_move, bottom_white, avoid_box,
-  on_auto, on_delay, on_strength)` is the Tk `MirrorView`: drawn with **the
-  opponent at the bottom** (`bottom_white = not playing_white`), unicode
+  on_auto, on_delay, on_strength)` is the Tk `MirrorView`: drawn with
+  `bottom_white = view_bottom_white(playing_white)`, unicode
   piece glyphs, click-origin then click-destination → `on_move`,
   last-move/selection highlights, status line, and a control bar (Auto-play
   checkbox, reply-delay spinbox, strength menu from `STRENGTHS` presets)
