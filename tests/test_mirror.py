@@ -503,5 +503,20 @@ class ParserTests(unittest.TestCase):
             build_parser().parse_args(["--mode", "telepathy"])
 
 
+class RequireTkTests(unittest.TestCase):
+    """Mirror mode fails fast, with install guidance, when Tk is missing."""
+
+    def test_missing_tkinter_exits_with_brew_hint(self):
+        from unittest import mock
+        from chesscheat.app import _require_tk
+
+        with mock.patch.dict("sys.modules", {"tkinter": None}):
+            with self.assertRaises(SystemExit) as raised:
+                _require_tk()
+        message = str(raised.exception)
+        self.assertIn("tkinter", message)
+        self.assertIn("brew install python-tk@", message)
+
+
 if __name__ == "__main__":
     unittest.main()

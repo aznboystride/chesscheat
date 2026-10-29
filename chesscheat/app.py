@@ -326,6 +326,26 @@ def reader_main(engine_url=None):
         interval=0.3, trigger=trigger, on_trigger=on_trigger)
 
 
+def _require_tk():
+    """Fail fast with install guidance when Tk is unavailable.
+
+    Mirror mode's board *is* a Tk window (there is no text fallback for it),
+    so check before asking the user anything. Homebrew Python on macOS ships
+    Tk as a separate formula, which is the usual reason it is missing.
+
+    Raises:
+        SystemExit: If ``tkinter`` cannot be imported.
+    """
+    try:
+        import tkinter  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            f"Mirror mode needs Tk for its board window, but Python has no "
+            f"tkinter ({exc}).\nOn macOS with Homebrew Python, install the "
+            f"matching Tk and rerun, e.g.:\n    brew install "
+            f"python-tk@{sys.version_info.major}.{sys.version_info.minor}")
+
+
 def mirror_main(engine_url=None):
     """Run mirror mode: a GUI where the user plays the opponent's moves.
 
@@ -345,6 +365,7 @@ def mirror_main(engine_url=None):
     from chesscheat.gui import MirrorBoardWindow
 
     print("=== Mirror Mode ===")
+    _require_tk()
     print("Pick your side, then click the real board's corners. A mirror "
           "board opens from the\nopponent's perspective: enter each opponent "
           "move on it and the program answers\nthere and in the real app.\n")
