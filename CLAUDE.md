@@ -308,7 +308,10 @@ on_event)` is the controller, programmed only against `MoveEngine` /
   reporting each change through its callback; `schedule(seconds, fn)` wraps
   Tk `after` for the controller's non-blocking delay; `run()` is the Tk
   mainloop (this mode has no capture loop).
-- `app.mirror_main(engine_url)` wires it: side + box via the setup provider,
+- `app.mirror_main(engine_url)` wires it: `_require_tk()` first (mirror mode
+  has no text fallback for its board, so a missing `tkinter` exits at once
+  with a `brew install python-tk@X.Y` hint instead of prompting and then
+  crashing), then side + box via the setup provider,
   `build_engine`, `PyAutoGuiActuator`, the window, timestamped console
   events; `app.main(argv)` dispatches `--mode reader|mirror` via
   `build_parser()`.
