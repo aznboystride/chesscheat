@@ -30,6 +30,17 @@ echo "Upgrading pip ..."
 echo "Installing dependencies from requirements.txt ..."
 "$VENV_DIR/bin/pip" install -r requirements.txt
 
+# The GUI windows need Tk. Homebrew Python ships it as a separate, versioned
+# formula, so check now and name the matching one rather than letting the
+# user discover it at launch. Non-fatal.
+if ! "$VENV_DIR/bin/python" -c "import tkinter" >/dev/null 2>&1; then
+    PYVER="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    echo "  Warning: this Python (${PYVER}) has no Tk (tkinter), so the GUI"
+    echo "  windows cannot open. On macOS with Homebrew Python, install the"
+    echo "  matching Tk (the version must match the venv's Python):"
+    echo "      brew install python-tk@${PYVER}"
+fi
+
 if [ "${SKIP_STOCKFISH:-0}" = "1" ]; then
     echo "Skipping Stockfish download (SKIP_STOCKFISH=1)."
 else
