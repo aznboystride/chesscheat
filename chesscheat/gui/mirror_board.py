@@ -9,6 +9,11 @@ GLYPHS = {"K": "♔", "Q": "♕", "R": "♖", "B": "♗",
           "N": "♘", "P": "♙", "k": "♚", "q": "♛",
           "r": "♜", "b": "♝", "n": "♞", "p": "♟"}
 
+# Strength presets offered in the GUI: label -> Elo (None = full strength).
+# Stockfish's UCI_Elo spans roughly 1320-3190; the engine clamps as needed.
+STRENGTHS = (("Full strength", None), ("2800", 2800), ("2500", 2500),
+             ("2200", 2200), ("1900", 1900), ("1600", 1600), ("1400", 1400))
+
 
 class MirrorBoardWindow(MirrorView):
     """A tkinter board the user enters the opponent's moves on.
@@ -19,6 +24,12 @@ class MirrorBoardWindow(MirrorView):
     (the controller validates it). The last move played is highlighted and
     a status line says whose turn it is.
 
+    A control bar under the board exposes the runtime settings -- an
+    **Auto-play** toggle, a minimum **reply delay** in seconds, and the
+    engine **strength** -- each reported through its own callback the moment
+    it changes. ``schedule`` defers work on the Tk event loop so a delayed
+    reply never freezes the window.
+
     Driven by ``run`` (Tk mainloop); redrawn through ``update``. tkinter is
     imported lazily so the module is importable without it.
 
@@ -27,7 +38,8 @@ class MirrorBoardWindow(MirrorView):
     """
 
     def __init__(self, on_move, bottom_white, avoid_box=None, cell=64,
-                 title="chesscheat mirror board"):
+                 title="chesscheat mirror board", on_auto=None, on_delay=None,
+                 on_strength=None, auto=True, delay=0.0, elo=None):
         """Create the window.
 
         Args:
@@ -41,6 +53,12 @@ class MirrorBoardWindow(MirrorView):
                 ``chesscheat.mirror.gui_placement``.
             cell: Square size in pixels.
             title: Window title.
+            on_auto: Callback ``(enabled)`` when the auto-play toggle changes.
+            on_delay: Callback ``(seconds)`` when the reply delay changes.
+            on_strength: Callback ``(elo_or_None)`` when the strength changes.
+            auto: Initial state of the auto-play toggle.
+            delay: Initial reply delay shown, in seconds.
+            elo: Initial strength shown (None = full strength).
         """
         import tkinter as tk
 
@@ -60,7 +78,7 @@ class MirrorBoardWindow(MirrorView):
         if avoid_box is not None:
             x, y = gui_placement(avoid_box, self._root.winfo_screenwidth(),
                                  self._root.winfo_screenheight(),
-                                 side, side + 48)
+                                 side, side + 96)
             self._root.geometry(f"+{int(x)}+{int(y)}")
         self._canvas = tk.Canvas(self._root, width=side, height=side,
                                  highlightthickness=0)
@@ -69,6 +87,71 @@ class MirrorBoardWindow(MirrorView):
         self._status = tk.Label(self._root, text="", anchor="w",
                                 font=("Helvetica", 12), padx=8, pady=6)
         self._status.pack(fill="x")
+        self._build_controls(tk, on_auto, on_delay, on_strength,
+                             auto, delay, elo)
+
+    def _build_controls(self, tk, on_auto, on_delay, on_strength,
+                        auto, delay, elo):
+        """Lay out the auto-play, delay and strength controls.
+
+        Args:
+            tk: The imported ``tkinter`` module.
+            on_auto: Auto-play toggle callback (or None).
+            on_delay: Delay change callback (or None).
+            on_strength: Strength change callback (or None).
+            auto: Initial toggle state.
+            delay: Initial delay in seconds.
+            elo: Initial strength (None = full).
+        """
+        bar = tk.Frame(self._root, padx=8, pady=4)
+        bar.pack(fill="x")
+
+        self._auto_var = tk.BooleanVar(master=self._root, value=auto)
+        tk.Checkbutton(
+            bar, text="Auto-play", variable=self._auto_var,
+            command=lambda: on_auto and on_auto(self._auto_var.get()),
+        ).pack(side="left")
+
+        tk.Label(bar, text="  Reply delay (s):").pack(side="left")
+        self._delay_var = tk.StringVar(master=self._root, value=f"{delay:g}")
+
+        def delay_changed(*_args):
+            try:
+                seconds = max(0.0, float(self._delay_var.get()))
+            except ValueError:
+                return
+            if on_delay:
+                on_delay(seconds)
+
+        delay_box = tk.Spinbox(bar, from_=0, to=120, increment=0.5, width=5,
+                               textvariable=self._delay_var,
+                               command=delay_changed)
+        delay_box.bind("<Return>", delay_changed)
+        delay_box.bind("<FocusOut>", delay_changed)
+        delay_box.pack(side="left")
+
+        tk.Label(bar, text="  Strength:").pack(side="left")
+        labels = [label for label, _ in STRENGTHS]
+        initial = next((label for label, value in STRENGTHS if value == elo),
+                       labels[0])
+        self._strength_var = tk.StringVar(master=self._root, value=initial)
+        by_label = dict(STRENGTHS)
+
+        def strength_changed(label):
+            if on_strength:
+                on_strength(by_label[label])
+
+        tk.OptionMenu(bar, self._strength_var, *labels,
+                      command=strength_changed).pack(side="left")
+
+    def schedule(self, seconds, fn):
+        """Run ``fn`` after ``seconds`` on the Tk event loop (non-blocking).
+
+        Args:
+            seconds: Delay before ``fn`` runs.
+            fn: A no-argument callable.
+        """
+        self._root.after(max(0, int(seconds * 1000)), fn)
 
     def _square_at(self, x, y):
         """Map a canvas click to the square's algebraic name.

@@ -111,7 +111,9 @@ tests/              test_board, test_recognition, test_legal_move_filter, ...
   square's empty background from one colour to another (for template synthesis).
 - `BoardRecognizer` — `calibrate(image, playing_white)`, `read(image)`.
 - `MoveEngine` — `best_move(fen)` returns the best move (UCI) for a full FEN,
-  or None. **This is the decision-maker interface**: `StockfishMoveEngine`
+  or None; plus a **concrete, optional** `set_strength(elo)` (None = full
+  strength; the base is a no-op so engines that can't vary strength ignore
+  it). **This is the decision-maker interface**: `StockfishMoveEngine`
   (local binary) and `RemoteMoveEngine` (HTTP service) implement it, and
   `app.build_engine(engine_url)` picks one (`--engine-url` /
   `CHESSCHEAT_ENGINE_URL` → remote, else local). `MoveActuator` —
@@ -217,7 +219,10 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
 - `StockfishMoveEngine` — locates a binary (explicit path / `STOCKFISH_PATH` /
   `shutil.which("stockfish")`) at construction; `best_move` opens a UCI engine
   per call via **python-chess** (`chess.engine`, lazy), returns None for an
-  invalid/finished position. The binary is normally supplied by
+  invalid/finished position. `set_strength(elo)` is applied to each fresh
+  process via the pure `limit_strength_options(elo, min, max)` →
+  `{UCI_LimitStrength, UCI_Elo}` clamped to the engine's advertised range
+  (skipped if the engine has no `UCI_Elo` option). The binary is normally supplied by
   `scripts/install_stockfish.py` (run from `setup.sh`), which picks the
   release asset for the host — `asset_candidates`/`select_asset` map
   system/machine to the right `.tar` (Apple Silicon M1–M4 → the single
@@ -225,8 +230,9 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   GitHub releases, installs it as `venv/bin/stockfish` and clears the macOS
   quarantine flag. Stdlib-only; the selection logic is pure and tested in
   `test_install_stockfish.py` (no network).
-- `RemoteMoveEngine(url)` — the second decision maker: ``POST {"fen": …}``
-  to an HTTP endpoint, reads ``{"move": "e2e4"}`` (``null`` → None).
+- `RemoteMoveEngine(url)` — the second decision maker: ``POST {"fen": …,
+  "elo": …}`` to an HTTP endpoint (``elo`` from `set_strength`, null = full),
+  reads ``{"move": "e2e4"}`` (``null`` → None).
   Stdlib ``urllib`` only; raises ``RuntimeError`` on an unreachable service,
   non-2xx status or a reply without ``move``. Tested against a real local
   ``http.server`` in `test_mirror.py`.
@@ -263,21 +269,38 @@ on_event)` is the controller, programmed only against `MoveEngine` /
 - holds a **python-chess** `Board` (lazy import; rules, legality, castling,
   en passant, promotion) — `position_map(board)` converts it to the project's
   board map; `fen` exposes the full FEN for the engine;
-- `start()` plays first if the program is white, else waits; `submit_opponent_move(from, to)`
-  rejects out-of-turn or illegal entries with a status (auto-queens a
-  promotion), pushes the move, then `_play_reply` → `engine.best_move(fen)`
-  → validates the reply is legal → pushes → `actuator.apply(uci, box,
+- `start()` plays first if the program is white (and auto is on), else waits;
+  `submit_move(from, to)` is the single entry point from the view: on the
+  opponent's turn it records their move (auto-queening a promotion) and, if
+  auto is on, triggers `_reply`; on the program's turn it is accepted only
+  while auto is **paused** -- the user playing the program's side by hand --
+  and is then actuated in the real app too (`_play_program_move`, event
+  `"manual"`). Out-of-turn/illegal entries are rejected with a status.
+- Runtime settings, each changeable any time: `set_auto(enabled)` (turning
+  on mid-turn replies at once), `set_delay(seconds)`, `set_strength(elo)`
+  (forwarded to `engine.set_strength`). The **delay** is the minimum time
+  from the opponent's move (`_opponent_time`, via an injectable `clock`) to
+  the reply: `_reply` has the engine think immediately, validates the reply
+  is legal, then `_commit_after_delay` either plays now or defers itself via
+  the injectable `schedule(seconds, fn)` (Tk `after` in the GUI; immediate
+  by default) -- so the view never blocks. A deferred commit is dropped if
+  the position changed or auto was paused, and re-defers if the delay was
+  raised meanwhile. `_play_program_move` pushes → `actuator.apply(uci, box,
   playing_white)` (the **real app's** orientation = the user's side). Engine
   and actuator exceptions become status/events, never crashes; an actuator
   failure leaves the GUI move standing so the boards stay in sync.
 - `gui_placement(box, screen_w, screen_h, win_w, win_h)` (pure) positions the
   GUI right/left/below/above the real board — never on top of it, since the
   mouse drags land there.
-- `gui/mirror_board.py` `MirrorBoardWindow(on_move, bottom_white, avoid_box)`
-  is the Tk `MirrorView`: drawn with **the opponent at the bottom**
-  (`bottom_white = not playing_white`), unicode piece glyphs, click-origin
-  then click-destination → `on_move`, last-move/selection highlights, status
-  line; `run()` is the Tk mainloop (this mode has no capture loop).
+- `gui/mirror_board.py` `MirrorBoardWindow(on_move, bottom_white, avoid_box,
+  on_auto, on_delay, on_strength)` is the Tk `MirrorView`: drawn with **the
+  opponent at the bottom** (`bottom_white = not playing_white`), unicode
+  piece glyphs, click-origin then click-destination → `on_move`,
+  last-move/selection highlights, status line, and a control bar (Auto-play
+  checkbox, reply-delay spinbox, strength menu from `STRENGTHS` presets)
+  reporting each change through its callback; `schedule(seconds, fn)` wraps
+  Tk `after` for the controller's non-blocking delay; `run()` is the Tk
+  mainloop (this mode has no capture loop).
 - `app.mirror_main(engine_url)` wires it: side + box via the setup provider,
   `build_engine`, `PyAutoGuiActuator`, the window, timestamped console
   events; `app.main(argv)` dispatches `--mode reader|mirror` via
@@ -368,7 +391,13 @@ time are recognised exactly.
   both places with the app's orientation, program-as-black waits then
   answers, illegal/out-of-turn entries rejected without consulting the
   engine, promotion auto-queens, engine None/exception/illegal-reply and
-  actuator failure all become statuses without desync. `RemoteMoveEngine`
+  actuator failure all become statuses without desync; the runtime settings
+  -- auto off lets the user play the program's side (actuated in the real
+  app, no engine call) and rejects nothing but illegal moves, auto back on
+  mid-turn replies at once; the delay (fake clock + recording scheduler):
+  engine consulted immediately but the commit deferred, fired commit plays,
+  cancelled by a pause or a position change, extended when raised; strength
+  forwarded to the engine. `RemoteMoveEngine`
   against a real local `http.server` (protocol, null move, 5xx, malformed,
   unreachable). `build_parser` modes/engine-url.
 - `test_assist.py` — the move assist, dep-free via mocks: `cell_of`/

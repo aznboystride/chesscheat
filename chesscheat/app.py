@@ -366,14 +366,19 @@ def mirror_main(engine_url=None):
         print(f"[{time.strftime('%H:%M:%S')}] {kind}: {detail}", flush=True)
 
     def on_move(origin, destination):
-        mirror.submit_opponent_move(origin, destination)   # bound below
+        mirror.submit_move(origin, destination)   # bound below
 
-    view = MirrorBoardWindow(on_move, bottom_white=not playing_white,
-                             avoid_box=box)
+    view = MirrorBoardWindow(
+        on_move, bottom_white=not playing_white, avoid_box=box,
+        on_auto=lambda enabled: mirror.set_auto(enabled),
+        on_delay=lambda seconds: mirror.set_delay(seconds),
+        on_strength=lambda elo: mirror.set_strength(elo))
     mirror = MirrorGame(playing_white, box, engine, PyAutoGuiActuator(),
-                        view, on_event=log)
+                        view, on_event=log, schedule=view.schedule)
     log("mode", f"you play {'white' if playing_white else 'black'}; "
-                f"enter {'black' if playing_white else 'white'}'s moves")
+                f"enter {'black' if playing_white else 'white'}'s moves. "
+                "Toggle Auto-play, the reply delay and the strength in the "
+                "window at any time.")
     mirror.start()
     view.run()
 

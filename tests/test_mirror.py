@@ -113,7 +113,7 @@ class MirrorGameTests(unittest.TestCase):
         self.assertIn("opponent's move (white)", view.updates[-1][2])
 
         # The user mirrors white's 1.e4; the engine answers with 1...e5.
-        reply = game.submit_opponent_move("e2", "e4")
+        reply = game.submit_move("e2", "e4")
         self.assertEqual(reply, "e7e5")
         self.assertEqual(engine.seen_fens[0].split()[1], "b")
         self.assertEqual(actuator.applied, [("e7e5", BOX, False)])
@@ -123,7 +123,7 @@ class MirrorGameTests(unittest.TestCase):
     def test_illegal_opponent_move_is_rejected_without_consulting_engine(self):
         game, engine, actuator, view, _ = self._game(False, "e7e5")
         game.start()
-        self.assertIsNone(game.submit_opponent_move("e2", "e5"))
+        self.assertIsNone(game.submit_move("e2", "e5"))
         self.assertEqual(engine.seen_fens, [])
         self.assertEqual(actuator.applied, [])
         self.assertIn("not a legal move", view.updates[-1][2])
@@ -132,7 +132,7 @@ class MirrorGameTests(unittest.TestCase):
     def test_move_out_of_turn_is_rejected(self):
         game, engine, actuator, view, _ = self._game(True, "e2e4")
         # Before start() it is white's (the program's) turn.
-        self.assertIsNone(game.submit_opponent_move("e7", "e5"))
+        self.assertIsNone(game.submit_move("e7", "e5"))
         self.assertIn("program's turn", view.updates[-1][2])
         self.assertEqual(engine.seen_fens, [])
 
@@ -142,7 +142,7 @@ class MirrorGameTests(unittest.TestCase):
         # Hand-build: black pawn on b2 about to promote, white to move first.
         game._game = chess.Board("4k3/8/8/8/8/8/1p6/R3K3 w Q - 0 1")
         game.start()                       # program plays Ra1-a2
-        reply = game.submit_opponent_move("b2", "b1")
+        reply = game.submit_move("b2", "b1")
         self.assertEqual(game.board_map()[(1, 1)], "q")
 
     def test_engine_without_a_move_leaves_mouse_alone(self):
@@ -187,6 +187,232 @@ class MirrorGameTests(unittest.TestCase):
         self.assertIsInstance(MockMirrorView(), MirrorView)
 
 
+class _Scheduler:
+    """Records deferred callbacks so a test can fire them deliberately."""
+
+    def __init__(self):
+        self.pending = []   # (seconds, fn)
+
+    def __call__(self, seconds, fn):
+        self.pending.append((seconds, fn))
+
+    def fire(self):
+        """Run every pending callback (in order), clearing the queue first."""
+        pending, self.pending = self.pending, []
+        for _seconds, fn in pending:
+            fn()
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class AutoToggleTests(unittest.TestCase):
+    """Pausing auto-play lets the user move for the program's side."""
+
+    def _game(self, playing_white, move="e2e4", **kwargs):
+        engine, actuator, view = (MockMoveEngine(move), MockMoveActuator(),
+                                  MockMirrorView())
+        events = []
+        game = MirrorGame(playing_white, BOX, engine, actuator, view,
+                          on_event=lambda k, d: events.append((k, d)),
+                          **kwargs)
+        return game, engine, actuator, view, events
+
+    def test_paused_program_white_does_not_move_first(self):
+        game, engine, actuator, view, _ = self._game(True, auto=False)
+        game.start()
+        self.assertEqual(engine.seen_fens, [])
+        self.assertEqual(actuator.applied, [])
+        self.assertIn("paused", view.updates[-1][2])
+
+    def test_manual_move_is_played_in_the_real_app_without_the_engine(self):
+        game, engine, actuator, view, events = self._game(True, auto=False)
+        game.start()
+        self.assertEqual(game.submit_move("g1", "f3"), "g1f3")
+        self.assertEqual(engine.seen_fens, [])
+        self.assertEqual(actuator.applied, [("g1f3", BOX, True)])
+        self.assertIn(("manual", "g1f3"), events)
+        self.assertEqual(game.board_map()[(5, 3)], "N")
+        # Now it is the opponent's turn again.
+        self.assertIn("opponent's move (black)", view.updates[-1][2])
+
+    def test_illegal_manual_move_is_rejected(self):
+        game, _, actuator, view, _ = self._game(True, auto=False)
+        game.start()
+        self.assertIsNone(game.submit_move("g1", "g3"))
+        self.assertEqual(actuator.applied, [])
+        self.assertIn("not a legal move for white", view.updates[-1][2])
+
+    def test_opponent_move_while_paused_does_not_consult_engine(self):
+        game, engine, actuator, view, _ = self._game(False, "e7e5",
+                                                     auto=False)
+        game.start()
+        self.assertIsNone(game.submit_move("e2", "e4"))
+        self.assertEqual(engine.seen_fens, [])
+        self.assertIn("paused: play black's move", view.updates[-1][2])
+
+    def test_resuming_mid_turn_replies_at_once(self):
+        game, engine, actuator, view, events = self._game(False, "e7e5",
+                                                          auto=False)
+        game.start()
+        game.submit_move("e2", "e4")          # program's turn, paused
+        game.set_auto(True)
+        self.assertEqual(len(engine.seen_fens), 1)
+        self.assertEqual(actuator.applied, [("e7e5", BOX, False)])
+        self.assertIn(("auto", "on"), events)
+
+    def test_pausing_then_manual_then_resume(self):
+        game, engine, actuator, view, _ = self._game(True, "d2d4")
+        game.start()                           # engine plays 1.d4
+        game.set_auto(False)
+        game.submit_move("d7", "d5")           # opponent, no reply (paused)
+        game.submit_move("c2", "c4")           # user plays white's 2.c4
+        self.assertEqual([a[0] for a in actuator.applied], ["d2d4", "c2c4"])
+        self.assertEqual(len(engine.seen_fens), 1)
+        game.set_auto(True)                    # opponent to move: nothing
+        self.assertEqual(len(engine.seen_fens), 1)
+        self.assertIn("opponent's move (black)", view.updates[-1][2])
+
+    def test_automatic_turn_still_refuses_manual_entry(self):
+        game, _, actuator, view, _ = self._game(True)
+        # Auto on, program (white) to move before start(): user may not move.
+        self.assertIsNone(game.submit_move("e2", "e4"))
+        self.assertIn("pause auto-play", view.updates[-1][2])
+        self.assertEqual(actuator.applied, [])
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class ReplyDelayTests(unittest.TestCase):
+    """The reply is held for the minimum delay without blocking the view."""
+
+    def _game(self, delay, move="e7e5"):
+        self.now = [100.0]
+        self.scheduler = _Scheduler()
+        engine, actuator, view = (MockMoveEngine(move), MockMoveActuator(),
+                                  MockMirrorView())
+        game = MirrorGame(False, BOX, engine, actuator, view, delay=delay,
+                          clock=lambda: self.now[0],
+                          schedule=self.scheduler)
+        game.start()
+        return game, engine, actuator, view
+
+    def test_engine_thinks_immediately_but_commit_is_deferred(self):
+        game, engine, actuator, view = self._game(delay=5.0)
+        self.now[0] = 200.0
+        self.assertIsNone(game.submit_move("e2", "e4"))
+        self.assertEqual(len(engine.seen_fens), 1)          # thought now
+        self.assertEqual(actuator.applied, [])              # not yet played
+        self.assertEqual(len(self.scheduler.pending), 1)
+        self.assertAlmostEqual(self.scheduler.pending[0][0], 5.0)
+        self.assertIn("Waiting 5.0s", view.updates[-1][2])
+        # Board not yet changed for the program's side.
+        self.assertEqual(game.board_map()[(4, 5)], ".")
+
+    def test_fired_commit_plays_in_both_places(self):
+        game, _, actuator, view = self._game(delay=5.0)
+        game.submit_move("e2", "e4")
+        self.now[0] += 5.0
+        self.scheduler.fire()
+        self.assertEqual(actuator.applied, [("e7e5", BOX, False)])
+        self.assertEqual(game.board_map()[(4, 5)], "p")
+        self.assertEqual(self.scheduler.pending, [])
+
+    def test_thinking_time_counts_toward_the_delay(self):
+        game, _, actuator, _ = self._game(delay=2.0)
+        # Opponent moved at t=100; by the time the engine answered the clock
+        # has advanced past the delay, so the reply is not deferred.
+        self.now[0] = 100.0
+        clock_values = iter([100.0, 103.0, 103.0, 103.0, 103.0, 103.0])
+        game._clock = lambda: next(clock_values)
+        self.assertEqual(game.submit_move("e2", "e4"), "e7e5")
+        self.assertEqual(actuator.applied, [("e7e5", BOX, False)])
+        self.assertEqual(self.scheduler.pending, [])
+
+    def test_pausing_during_the_wait_cancels_the_reply(self):
+        game, engine, actuator, _ = self._game(delay=5.0)
+        game.submit_move("e2", "e4")
+        game.set_auto(False)
+        self.now[0] += 5.0
+        self.scheduler.fire()
+        self.assertEqual(actuator.applied, [])
+        # Resuming re-thinks and, the delay having elapsed, plays at once.
+        game.set_auto(True)
+        self.assertEqual(len(engine.seen_fens), 2)
+        self.assertEqual(actuator.applied, [("e7e5", BOX, False)])
+
+    def test_position_change_during_the_wait_cancels_the_reply(self):
+        game, _, actuator, _ = self._game(delay=5.0)
+        game.submit_move("e2", "e4")
+        game.set_auto(False)
+        game.submit_move("g8", "f6")           # user plays black by hand
+        game.set_auto(True)                    # white (opponent) to move
+        self.now[0] += 5.0
+        self.scheduler.fire()                  # stale e7e5 must not land
+        self.assertEqual([a[0] for a in actuator.applied], ["g8f6"])
+
+    def test_raising_the_delay_extends_a_pending_wait(self):
+        game, _, actuator, _ = self._game(delay=5.0)
+        game.submit_move("e2", "e4")
+        game.set_delay(8.0)
+        self.now[0] += 5.0
+        self.scheduler.fire()                  # original timer: too early
+        self.assertEqual(actuator.applied, [])
+        self.assertEqual(len(self.scheduler.pending), 1)
+        self.assertAlmostEqual(self.scheduler.pending[0][0], 3.0)
+        self.now[0] += 3.0
+        self.scheduler.fire()
+        self.assertEqual(actuator.applied, [("e7e5", BOX, False)])
+
+    def test_zero_delay_plays_immediately(self):
+        game, _, actuator, _ = self._game(delay=0.0)
+        self.assertEqual(game.submit_move("e2", "e4"), "e7e5")
+        self.assertEqual(self.scheduler.pending, [])
+        self.assertEqual(actuator.applied, [("e7e5", BOX, False)])
+
+    def test_negative_delay_counts_as_zero(self):
+        game, _, _, _ = self._game(delay=-3.0)
+        self.assertEqual(game.delay, 0.0)
+        game.set_delay(-1)
+        self.assertEqual(game.delay, 0.0)
+
+
+@unittest.skipUnless(_HAVE_CHESS, "requires python-chess")
+class StrengthTests(unittest.TestCase):
+    def test_strength_is_forwarded_to_the_engine(self):
+        engine, events = MockMoveEngine(), []
+        game = MirrorGame(True, BOX, engine, MockMoveActuator(),
+                          MockMirrorView(),
+                          on_event=lambda k, d: events.append((k, d)))
+        game.set_strength(1500)
+        game.set_strength(None)
+        self.assertEqual(engine.strengths, [1500, None])
+        self.assertEqual(game.elo, None)
+        self.assertIn(("strength", "1500 Elo"), events)
+        self.assertIn(("strength", "full"), events)
+
+
+class StrengthOptionTests(unittest.TestCase):
+    """Pure mapping from a rating to Stockfish's UCI options (dep-free)."""
+
+    def test_full_strength_sends_nothing(self):
+        from chesscheat.assist import limit_strength_options
+        self.assertEqual(limit_strength_options(None, 1320, 3190), {})
+
+    def test_rating_is_clamped_to_the_engine_range(self):
+        from chesscheat.assist import limit_strength_options
+        self.assertEqual(limit_strength_options(1500, 1320, 3190),
+                         {"UCI_LimitStrength": True, "UCI_Elo": 1500})
+        self.assertEqual(limit_strength_options(800, 1320, 3190)["UCI_Elo"],
+                         1320)
+        self.assertEqual(limit_strength_options(9000, 1320, 3190)["UCI_Elo"],
+                         3190)
+
+    def test_base_engine_ignores_strength(self):
+        class Fixed(MoveEngine):
+            def best_move(self, fen):
+                return "e2e4"
+
+        self.assertIsNone(Fixed().set_strength(1500))   # no-op, no error
+
+
 class _BestMoveHandler(BaseHTTPRequestHandler):
     """A tiny best-move service: records requests, replies as configured."""
 
@@ -229,10 +455,14 @@ class RemoteMoveEngineTests(unittest.TestCase):
         _BestMoveHandler.status = 200
         _BestMoveHandler.seen = []
 
-    def test_posts_fen_and_returns_move(self):
+    def test_posts_fen_and_strength_and_returns_move(self):
         fen = board.to_full_fen(board.starting_board(), True)
-        self.assertEqual(RemoteMoveEngine(self.url).best_move(fen), "e2e4")
-        self.assertEqual(_BestMoveHandler.seen, [{"fen": fen}])
+        engine = RemoteMoveEngine(self.url)
+        self.assertEqual(engine.best_move(fen), "e2e4")
+        self.assertEqual(_BestMoveHandler.seen, [{"fen": fen, "elo": None}])
+        engine.set_strength(1800)
+        engine.best_move(fen)
+        self.assertEqual(_BestMoveHandler.seen[-1]["elo"], 1800)
 
     def test_null_move_becomes_none(self):
         _BestMoveHandler.reply = {"move": None}

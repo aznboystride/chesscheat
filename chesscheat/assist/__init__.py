@@ -10,11 +10,12 @@ remote HTTP service). Heavy/IO deps (``chess.engine``, ``pyautogui``,
 importing this package stays dependency-free.
 """
 
-from chesscheat.assist.stockfish_move_engine import StockfishMoveEngine
+from chesscheat.assist.stockfish_move_engine import (StockfishMoveEngine,
+                                                     limit_strength_options)
 from chesscheat.assist.remote_move_engine import RemoteMoveEngine
 from chesscheat.assist.pyautogui_actuator import PyAutoGuiActuator, move_pixels
 from chesscheat.assist.key_trigger import KeyTrigger
 from chesscheat.assist.coordinator import assist_move
 
-__all__ = ["StockfishMoveEngine", "RemoteMoveEngine", "PyAutoGuiActuator",
-           "move_pixels", "KeyTrigger", "assist_move"]
+__all__ = ["StockfishMoveEngine", "limit_strength_options", "RemoteMoveEngine",
+           "PyAutoGuiActuator", "move_pixels", "KeyTrigger", "assist_move"]

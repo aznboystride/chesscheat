@@ -90,6 +90,22 @@ for you to enter white's move.
 The mirror window is placed off the real board (right, left, below or above
 it, whichever fits) so it never sits under the mouse drags.
 
+A control bar under the board adjusts the behaviour at any time, mid-game:
+
+- **Auto-play** (toggle) — on: the engine chooses and plays your side's moves.
+  Off: auto-play pauses and *you* play your side on the mirror board by hand
+  (click origin, click destination); those moves are still played in the
+  real app for you. Switching it back on while it's your side's turn makes
+  the program reply immediately.
+- **Reply delay (s)** — the minimum time between the opponent's move and the
+  program's reply. The engine thinks straight away but the move is held back
+  until the delay has elapsed (the window stays responsive, so you can pause
+  during the wait). Raising it extends a pending wait.
+- **Strength** — full strength or a target Elo (2800 down to 1400). With the
+  local engine this sets Stockfish's `UCI_LimitStrength`/`UCI_Elo` (clamped
+  to the engine's supported range); the remote engine receives it as `elo`
+  in each request. Takes effect from the next reply.
+
 ### Choosing the decision maker
 
 The move chooser is the `MoveEngine` interface — `best_move(fen) -> uci` —
@@ -100,10 +116,12 @@ and both modes take any implementation:
 | `StockfishMoveEngine` (default) | locally, the binary `setup.sh` installed | nothing to do |
 | `RemoteMoveEngine` | on another machine, behind an HTTP endpoint | `--engine-url URL` or `CHESSCHEAT_ENGINE_URL` |
 
-The remote protocol is minimal JSON: `POST` `{"fen": "<full FEN>"}` and reply
-`{"move": "e2e4"}` (or `{"move": null}` for no move). Any service that
-speaks it works — a Stockfish on a beefier box, a cloud function, a
-different engine entirely. Implement `MoveEngine` yourself for anything else.
+The remote protocol is minimal JSON: `POST` `{"fen": "<full FEN>", "elo": N}`
+(`elo` is the requested strength, `null` for full; a service may ignore it)
+and reply `{"move": "e2e4"}` (or `{"move": null}` for no move). Any service
+that speaks it works — a Stockfish on a beefier box, a cloud function, a
+different engine entirely. Implement `MoveEngine` yourself for anything else;
+override its optional `set_strength(elo)` if your engine can vary strength.
 
 ## Requirements
 

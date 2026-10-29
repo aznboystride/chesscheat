@@ -13,14 +13,17 @@ class RemoteMoveEngine(MoveEngine):
     engine can run on another machine (a beefier box, a shared server, a
     cloud function). The wire format is deliberately minimal JSON:
 
-    - request: ``POST <url>`` with body ``{"fen": "<full FEN>"}``
-    - response: ``{"move": "e2e4"}`` (UCI), or ``{"move": null}`` for no move
+    - request: ``POST <url>`` with body ``{"fen": "<full FEN>", "elo": N}``
+      where ``elo`` is the requested strength or ``null`` for full strength
+      (the service may ignore it);
+    - response: ``{"move": "e2e4"}`` (UCI), or ``{"move": null}`` for no move.
 
     Standard-library only (``urllib``), so no extra client dependency.
 
     Attributes:
         url: The endpoint that computes best moves.
         timeout: Seconds to wait for a reply.
+        elo: Requested strength from ``set_strength``, or None.
     """
 
     def __init__(self, url, timeout=30.0):
@@ -32,6 +35,15 @@ class RemoteMoveEngine(MoveEngine):
         """
         self.url = url
         self.timeout = timeout
+        self.elo = None
+
+    def set_strength(self, elo):
+        """Forward a strength request to the service with each query.
+
+        Args:
+            elo: Target Elo rating, or None for full strength.
+        """
+        self.elo = elo
 
     def best_move(self, fen):
         """Ask the remote service for the best move.
@@ -47,7 +59,7 @@ class RemoteMoveEngine(MoveEngine):
             RuntimeError: If the service is unreachable, returns a non-2xx
                 status, or replies with malformed JSON.
         """
-        body = json.dumps({"fen": fen}).encode("utf-8")
+        body = json.dumps({"fen": fen, "elo": self.elo}).encode("utf-8")
         request = urllib.request.Request(
             self.url, data=body, method="POST",
             headers={"Content-Type": "application/json",
