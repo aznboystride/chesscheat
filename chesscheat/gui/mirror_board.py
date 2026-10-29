@@ -1,6 +1,7 @@
 """The ``MirrorBoardWindow`` mirror view."""
 
 from chesscheat import board
+from chesscheat.gui.background_runner import BackgroundRunner
 from chesscheat.interfaces import MirrorView
 
 LIGHT, DARK = "#f0d9b5", "#b58863"
@@ -36,11 +37,14 @@ class MirrorBoardWindow(MirrorView):
     **Auto-play** toggle, a **Watch app** toggle (read the opponent's moves
     off the real app's last-move highlight instead of entering them), a
     **reply delay range** (min/max seconds; equal for a fixed delay, apart
-    for random jitter), the engine **strength**, an **Undo** button that
-    takes back the last opponent move and the reply to it, and a **New
-    game** button that asks which colour the user plays now (the real board
-    is reused) -- each reported through its own callback.
-    ``set_orientation`` flips the board for a new game as the other colour.
+    for random jitter), the engine **strength**, the engine **think time**
+    with a **Think in delay** toggle, an **Undo** button that takes back the
+    last opponent move and the reply to it, and a **New game** button that
+    asks which colour the user plays now (the real board is reused) -- each
+    reported through its own callback. ``set_orientation`` flips the board
+    for a new game as the other colour. ``run_in_background`` runs the
+    engine search on a thread and delivers the result on the Tk loop, so
+    the window stays live while the engine thinks.
     ``square_position`` tells the controller where a square is on screen so
     the pointer can be returned here after a move in the real app. ``schedule`` defers work on the Tk event loop so a delayed
     reply never freezes the window.
@@ -55,8 +59,9 @@ class MirrorBoardWindow(MirrorView):
     def __init__(self, on_move, bottom_white, avoid_box=None, cell=64,
                  title="chesscheat mirror board", on_auto=None, on_delay=None,
                  on_strength=None, on_undo=None, on_watch=None,
-                 on_new_game=None, auto=True, delay=0.0, elo=None,
-                 watch=True):
+                 on_new_game=None, on_think=None, on_think_in_delay=None,
+                 auto=True, delay=0.0, elo=None, watch=True, think=0.3,
+                 think_in_delay=True):
         """Create the window.
 
         Args:
@@ -81,11 +86,16 @@ class MirrorBoardWindow(MirrorView):
                 changes.
             on_new_game: Callback ``(playing_white)`` after the user pressed
                 New game and chose a colour (not called on cancel).
+            on_think: Callback ``(seconds)`` when the think-time box changes.
+            on_think_in_delay: Callback ``(enabled)`` when the Think-in-delay
+                toggle changes.
             auto: Initial state of the auto-play toggle.
             delay: Initial reply delay shown: seconds, or a ``(min, max)``
                 pair.
             elo: Initial strength shown (None = full strength).
             watch: Initial state of the Watch-app toggle.
+            think: Initial think time shown, in seconds.
+            think_in_delay: Initial state of the Think-in-delay toggle.
         """
         import tkinter as tk
 
@@ -103,6 +113,7 @@ class MirrorBoardWindow(MirrorView):
         self._root = tk.Tk()
         self._root.title(title)
         self._root.attributes("-topmost", True)
+        self._runner = BackgroundRunner(self._root.after)
         side = 8 * cell
         if avoid_box is not None:
             x, y = gui_placement(avoid_box, self._root.winfo_screenwidth(),
@@ -123,6 +134,9 @@ class MirrorBoardWindow(MirrorView):
         self._status.pack(fill="x")
         self._build_controls(tk, on_auto, on_delay, on_strength, on_undo,
                              on_watch, auto, delay, elo, watch)
+        self._build_engine_controls(tk, on_strength, on_think,
+                                    on_think_in_delay, elo, think,
+                                    think_in_delay)
         self._draw_evaluation()
 
     def _build_controls(self, tk, on_auto, on_delay, on_strength, on_undo,
@@ -181,7 +195,28 @@ class MirrorBoardWindow(MirrorView):
             if var is self._delay_lo:
                 tk.Label(bar, text=" max:").pack(side="left")
 
-        tk.Label(bar, text="  Strength:").pack(side="left")
+        tk.Button(bar, text="Undo", command=lambda: on_undo and on_undo()
+                  ).pack(side="right")
+        tk.Button(bar, text="New game", command=self._new_game
+                  ).pack(side="right")
+
+    def _build_engine_controls(self, tk, on_strength, on_think,
+                               on_think_in_delay, elo, think, think_in_delay):
+        """Lay out the engine row: strength, think time, think-in-delay.
+
+        Args:
+            tk: The imported ``tkinter`` module.
+            on_strength: Strength change callback (or None).
+            on_think: Think-time change callback (or None).
+            on_think_in_delay: Think-in-delay toggle callback (or None).
+            elo: Initial strength (None = full).
+            think: Initial think time in seconds.
+            think_in_delay: Initial toggle state.
+        """
+        bar = tk.Frame(self._root, padx=8, pady=4)
+        bar.pack(fill="x")
+
+        tk.Label(bar, text="Strength:").pack(side="left")
         labels = [label for label, _ in STRENGTHS]
         initial = next((label for label, value in STRENGTHS if value == elo),
                        labels[0])
@@ -195,10 +230,45 @@ class MirrorBoardWindow(MirrorView):
         tk.OptionMenu(bar, self._strength_var, *labels,
                       command=strength_changed).pack(side="left")
 
-        tk.Button(bar, text="Undo", command=lambda: on_undo and on_undo()
-                  ).pack(side="right")
-        tk.Button(bar, text="New game", command=self._new_game
-                  ).pack(side="right")
+        tk.Label(bar, text="  Think (s):").pack(side="left")
+        self._think_var = tk.StringVar(master=self._root, value=f"{think:g}")
+
+        def think_changed(*_args):
+            try:
+                seconds = float(self._think_var.get())
+            except ValueError:
+                return
+            if on_think:
+                on_think(seconds)
+
+        box = tk.Spinbox(bar, from_=0.05, to=10, increment=0.1, width=5,
+                         textvariable=self._think_var, command=think_changed)
+        box.bind("<Return>", think_changed)
+        box.bind("<FocusOut>", think_changed)
+        box.pack(side="left")
+
+        self._think_in_delay_var = tk.BooleanVar(master=self._root,
+                                                 value=think_in_delay)
+        tk.Checkbutton(
+            bar, text="Think in delay", variable=self._think_in_delay_var,
+            command=lambda: on_think_in_delay and on_think_in_delay(
+                self._think_in_delay_var.get()),
+        ).pack(side="left")
+
+    def run_in_background(self, fn, done):
+        """Run ``fn`` on a thread and report its result on the Tk loop.
+
+        The controller's ``worker``: the engine searches off the GUI thread
+        so clicks keep working, and ``done(result, error)`` is invoked from
+        the event loop (never from the thread), where touching widgets is
+        safe.
+
+        Args:
+            fn: No-argument callable to run on a worker thread.
+            done: ``done(result, error)`` called on the Tk loop; ``error``
+                is the exception ``fn`` raised, else None.
+        """
+        self._runner.run(fn, done)
 
     def ask_side(self):
         """Ask which colour the user plays, for a new game.

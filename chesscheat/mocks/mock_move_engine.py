@@ -12,6 +12,7 @@ class MockMoveEngine(MoveEngine):
         seen_fens: FENs passed to ``best_move``, in order.
         evaluated: FENs passed to ``evaluate``, in order.
         strengths: Values passed to ``set_strength``, in order.
+        think_times: Values passed to ``set_think_time``, in order.
     """
 
     def __init__(self, move="e2e4"):
@@ -25,6 +26,15 @@ class MockMoveEngine(MoveEngine):
         self.seen_fens = []
         self.evaluated = []
         self.strengths = []
+        self.think_times = []
+
+    def set_think_time(self, seconds):
+        """Record a search-time request.
+
+        Args:
+            seconds: The requested search time; appended to ``think_times``.
+        """
+        self.think_times.append(seconds)
 
     def best_move(self, fen):
         """Record ``fen`` and return the canned move.

@@ -13,9 +13,10 @@ class RemoteMoveEngine(MoveEngine):
     engine can run on another machine (a beefier box, a shared server, a
     cloud function). The wire format is deliberately minimal JSON:
 
-    - request: ``POST <url>`` with body ``{"fen": "<full FEN>", "elo": N}``
-      where ``elo`` is the requested strength or ``null`` for full strength
-      (the service may ignore it);
+    - request: ``POST <url>`` with body ``{"fen": "<full FEN>", "elo": N,
+      "think": S}`` where ``elo`` is the requested strength or ``null`` for
+      full strength and ``think`` the search time in seconds or ``null``
+      for the service's own default (it may ignore both);
     - response: ``{"move": "e2e4"}`` (UCI), or ``{"move": null}`` for no move.
     - evaluation: ``POST <url>`` with ``{"fen": "<full FEN>", "evaluate":
       true}``; the response may carry ``"score": {"cp": N}`` or
@@ -29,6 +30,8 @@ class RemoteMoveEngine(MoveEngine):
         url: The endpoint that computes best moves.
         timeout: Seconds to wait for a reply.
         elo: Requested strength from ``set_strength``, or None.
+        think_time: Requested search seconds from ``set_think_time``, or
+            None.
     """
 
     def __init__(self, url, timeout=30.0):
@@ -41,6 +44,15 @@ class RemoteMoveEngine(MoveEngine):
         self.url = url
         self.timeout = timeout
         self.elo = None
+        self.think_time = None
+
+    def set_think_time(self, seconds):
+        """Forward a search-time request to the service with each query.
+
+        Args:
+            seconds: Search time in seconds.
+        """
+        self.think_time = float(seconds)
 
     def set_strength(self, elo):
         """Forward a strength request to the service with each query.
@@ -64,7 +76,8 @@ class RemoteMoveEngine(MoveEngine):
             RuntimeError: If the service is unreachable, returns a non-2xx
                 status, or replies with malformed JSON.
         """
-        reply = self._post({"fen": fen, "elo": self.elo})
+        reply = self._post({"fen": fen, "elo": self.elo,
+                            "think": self.think_time})
         if "move" not in reply:
             raise RuntimeError(f"remote engine at {self.url} replied "
                                f"without a 'move' field: {reply!r}")

@@ -27,6 +27,19 @@ class MoveEngine(ABC):
             position).
         """
 
+    def set_think_time(self, seconds):
+        """Set how long the engine may search for the next ``best_move``.
+
+        Optional: the default ignores it (engines with a fixed or external
+        time budget). Takes effect for subsequent calls, so a controller may
+        vary it per move -- e.g. to think for as long as it would otherwise
+        wait before replying.
+
+        Args:
+            seconds: Search time budget in seconds.
+        """
+        return None
+
     def evaluate(self, fen):
         """Score a position, for an evaluation display.
 

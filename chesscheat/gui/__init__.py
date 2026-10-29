@@ -3,6 +3,7 @@
 from chesscheat.gui.dialogs import select_side, select_box, confirm_box
 from chesscheat.gui.live_preview import LivePreview
 from chesscheat.gui.mirror_board import MirrorBoardWindow
+from chesscheat.gui.background_runner import BackgroundRunner
 
 __all__ = ["select_side", "select_box", "confirm_box", "LivePreview",
-           "MirrorBoardWindow"]
+           "MirrorBoardWindow", "BackgroundRunner"]
