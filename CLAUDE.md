@@ -17,6 +17,11 @@ source venv/bin/activate
 
 # Run the live reader (needs a real display)
 python3 -m chesscheat
+# Mirror mode: no detection; enter the opponent's moves on a GUI, the
+# engine plays yours (in the GUI and, by mouse, in the real app)
+python3 -m chesscheat --mode mirror
+# Either mode with a remote decision maker instead of local Stockfish
+python3 -m chesscheat --mode mirror --engine-url http://host:8000/best-move
 
 # Run the whole test suite (pure logic + mock pipeline; needs no deps)
 python3 -m unittest discover -s tests -t . -v
@@ -79,15 +84,17 @@ chesscheat/
   board.py          pure logic (functions, no classes)
   __main__.py       `python3 -m chesscheat` entry point
   interfaces/       SetupProvider, FrameSource, ImageBackend, BoardRecognizer,
-                    MoveEngine, MoveActuator, MoveTrigger
+                    MoveEngine, MoveActuator, MoveTrigger, MirrorView
   recognition/      TemplateBoardRecognizer, NumpyImageBackend, LegalMoveFilter
   providers/        Gui/Prompt/Fallback SetupProvider, ScreenFrameSource
-  assist/           StockfishMoveEngine, PyAutoGuiActuator, KeyTrigger,
-                    assist_move (move_pixels)
+  assist/           StockfishMoveEngine, RemoteMoveEngine, PyAutoGuiActuator,
+                    KeyTrigger, assist_move (move_pixels)
+  mirror/           MirrorGame (position_map), gui_placement
   mocks/            Mock{SetupProvider,FrameSource,ImageBackend,MoveEngine,
-                    MoveActuator,MoveTrigger}, synthetic_image
+                    MoveActuator,MoveTrigger,MirrorView}, synthetic_image
   capture/          screenshot
-  gui/              dialogs, overlays (annotations/draw), LivePreview
+  gui/              dialogs, overlays (annotations/draw), LivePreview,
+                    MirrorBoardWindow
 tests/              test_board, test_recognition, test_legal_move_filter, ...
 ```
 
@@ -104,9 +111,16 @@ tests/              test_board, test_recognition, test_legal_move_filter, ...
   square's empty background from one colour to another (for template synthesis).
 - `BoardRecognizer` — `calibrate(image, playing_white)`, `read(image)`.
 - `MoveEngine` — `best_move(fen)` returns the best move (UCI) for a full FEN,
-  or None. `MoveActuator` — `apply(uci, box, playing_white)` plays a move by
-  dragging the mouse. `MoveTrigger` — `start()`/`poll()`/`stop()`; `poll`
-  edge-consumes one activation (the read loop polls it once per frame).
+  or None. **This is the decision-maker interface**: `StockfishMoveEngine`
+  (local binary) and `RemoteMoveEngine` (HTTP service) implement it, and
+  `app.build_engine(engine_url)` picks one (`--engine-url` /
+  `CHESSCHEAT_ENGINE_URL` → remote, else local). `MoveActuator` —
+  `apply(uci, box, playing_white)` plays a move by dragging the mouse.
+  `MoveTrigger` — `start()`/`poll()`/`stop()`; `poll` edge-consumes one
+  activation (the read loop polls it once per frame). `MirrorView` —
+  `update(board_map, last_move, status)` / `run()`: the mirror-mode board the
+  user enters the opponent's moves on (it reports picks via the callback it
+  was constructed with).
 
 ### Core logic (`chesscheat/board.py`) — dependency-free, the source of truth
 
@@ -211,6 +225,11 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   GitHub releases, installs it as `venv/bin/stockfish` and clears the macOS
   quarantine flag. Stdlib-only; the selection logic is pure and tested in
   `test_install_stockfish.py` (no network).
+- `RemoteMoveEngine(url)` — the second decision maker: ``POST {"fen": …}``
+  to an HTTP endpoint, reads ``{"move": "e2e4"}`` (``null`` → None).
+  Stdlib ``urllib`` only; raises ``RuntimeError`` on an unreachable service,
+  non-2xx status or a reply without ``move``. Tested against a real local
+  ``http.server`` in `test_mirror.py`.
 - `PyAutoGuiActuator` — `move_pixels(uci, box, playing_white)` (pure: maps the
   from/to squares to screen-pixel centres via `board.parse_square`/`cell_of`)
   then `pyautogui` (lazy) moveTo → mouseDown → moveTo(duration) → mouseUp.
@@ -233,6 +252,37 @@ orchestration: `board.to_full_fen` → `engine.best_move(fen)` → (if a move)
   and logs `("assist", …)` events; engine exceptions are caught so the loop
   survives.
 
+### Mirror mode (`chesscheat/mirror/`) — `--mode mirror`
+
+No detection. The user mirrors each **opponent** move on a GUI board and the
+program plays its own side's reply in two places at once: on the GUI and,
+via the `MoveActuator`, in the real app (dragging the mouse over the box the
+user clicked out). `MirrorGame(playing_white, box, engine, actuator, view,
+on_event)` is the controller, programmed only against `MoveEngine` /
+`MoveActuator` / `MirrorView`:
+- holds a **python-chess** `Board` (lazy import; rules, legality, castling,
+  en passant, promotion) — `position_map(board)` converts it to the project's
+  board map; `fen` exposes the full FEN for the engine;
+- `start()` plays first if the program is white, else waits; `submit_opponent_move(from, to)`
+  rejects out-of-turn or illegal entries with a status (auto-queens a
+  promotion), pushes the move, then `_play_reply` → `engine.best_move(fen)`
+  → validates the reply is legal → pushes → `actuator.apply(uci, box,
+  playing_white)` (the **real app's** orientation = the user's side). Engine
+  and actuator exceptions become status/events, never crashes; an actuator
+  failure leaves the GUI move standing so the boards stay in sync.
+- `gui_placement(box, screen_w, screen_h, win_w, win_h)` (pure) positions the
+  GUI right/left/below/above the real board — never on top of it, since the
+  mouse drags land there.
+- `gui/mirror_board.py` `MirrorBoardWindow(on_move, bottom_white, avoid_box)`
+  is the Tk `MirrorView`: drawn with **the opponent at the bottom**
+  (`bottom_white = not playing_white`), unicode piece glyphs, click-origin
+  then click-destination → `on_move`, last-move/selection highlights, status
+  line; `run()` is the Tk mainloop (this mode has no capture loop).
+- `app.mirror_main(engine_url)` wires it: side + box via the setup provider,
+  `build_engine`, `PyAutoGuiActuator`, the window, timestamped console
+  events; `app.main(argv)` dispatches `--mode reader|mirror` via
+  `build_parser()`.
+
 ### Mocks (`chesscheat/mocks/`) — dependency-free, test the whole pipeline
 
 `MockSetupProvider`, `MockFrameSource` (scripted frames), `render_mock_image`
@@ -241,7 +291,8 @@ a square-colour tint that matching ignores), `MockImageBackend` (same
 normalised-correlation logic as the real backend, in pure Python), and the
 assist mocks: `MockMoveEngine` (canned move, records FENs), `MockMoveActuator`
 (records `(uci, box, playing_white)`), `MockMoveTrigger` (`fire()` queues an
-activation `poll` consumes).
+activation `poll` consumes), and `MockMirrorView` (records every
+`(board_map, last_move, status)` redraw).
 
 ### App loop (`chesscheat/app.py`)
 
@@ -311,6 +362,15 @@ time are recognised exactly.
   `macos-m1-apple-silicon.tar`, Intel-Mac/Linux ordering and fallbacks,
   `.tar`-only, unsupported platforms → None. Loads `scripts/install_stockfish.py`
   by path; dep-free, no network.
+- `test_mirror.py` — mirror mode: `gui_placement` (right/left/below/above
+  fallbacks, never over the box; dep-free), `position_map`, and `MirrorGame`
+  through the mocks (`skipUnless(chess)`): program-as-white moves first in
+  both places with the app's orientation, program-as-black waits then
+  answers, illegal/out-of-turn entries rejected without consulting the
+  engine, promotion auto-queens, engine None/exception/illegal-reply and
+  actuator failure all become statuses without desync. `RemoteMoveEngine`
+  against a real local `http.server` (protocol, null move, 5xx, malformed,
+  unreachable). `build_parser` modes/engine-url.
 - `test_assist.py` — the move assist, dep-free via mocks: `cell_of`/
   `parse_square`/`castling_field`/`to_full_fen` helpers, `move_pixels`
   geometry (white/black orientation, promotion suffix ignored), `assist_move`
@@ -334,9 +394,9 @@ Keep heavy/IO deps (`numpy`, `mss`, `chess`/`chess.engine`, `pyautogui`,
 `pynput`, tkinter, `chesscheat.capture`) imported **lazily** inside the
 methods/functions that use them (see `recognition/numpy_image_backend.py`,
 `recognition/legal_move_filter.py`, `assist/` (engine/actuator/trigger),
-`providers/`, `gui/dialogs.py`). The `board`, `interfaces`, `mocks` and
-`assist` packages and the `run` loop must stay importable dependency-free so
-the suite runs anywhere (the `assist/__init__` re-exports only lazily-importing
-classes). Subpackage `__init__.py` files must likewise avoid eager heavy
+`mirror/mirror_game.py`, `providers/`, `gui/dialogs.py`). The `board`,
+`interfaces`, `mocks`, `assist` and `mirror` packages and the `run` loop must
+stay importable dependency-free so the suite runs anywhere (the subpackage
+`__init__`s re-export only lazily-importing modules). Subpackage `__init__.py` files must likewise avoid eager heavy
 imports (e.g. `capture/__init__.py` pulls in numpy, so depend on it only
 behind a lazy import).

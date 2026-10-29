@@ -74,6 +74,37 @@ or `pynput` aren't available the reader prints why and runs without it. Set
 > site and will get accounts banned. Use it for analysis, bots, and local
 > experimentation.
 
+### Mirror mode (no detection)
+
+`python3 -m chesscheat --mode mirror` skips screen reading entirely. You pick
+your side and click the real board's corners, and a **mirror board** opens
+next to it, drawn from the **opponent's** perspective (their pieces at the
+bottom). Play each opponent move on the mirror board — click the origin
+square, then the destination — and the program answers immediately in two
+places: on the mirror board, and in the real chess app, by dragging the
+piece over the region you selected. Illegal entries are refused with a
+message; a pawn you push to the last rank promotes to a queen. If you play
+white the program opens with white's first move; if you play black it waits
+for you to enter white's move.
+
+The mirror window is placed off the real board (right, left, below or above
+it, whichever fits) so it never sits under the mouse drags.
+
+### Choosing the decision maker
+
+The move chooser is the `MoveEngine` interface — `best_move(fen) -> uci` —
+and both modes take any implementation:
+
+| Implementation | Where the engine runs | Select it with |
+|---|---|---|
+| `StockfishMoveEngine` (default) | locally, the binary `setup.sh` installed | nothing to do |
+| `RemoteMoveEngine` | on another machine, behind an HTTP endpoint | `--engine-url URL` or `CHESSCHEAT_ENGINE_URL` |
+
+The remote protocol is minimal JSON: `POST` `{"fen": "<full FEN>"}` and reply
+`{"move": "e2e4"}` (or `{"move": null}` for no move). Any service that
+speaks it works — a Stockfish on a beefier box, a cloud function, a
+different engine entirely. Implement `MoveEngine` yourself for anything else.
+
 ## Requirements
 
 - Python 3.8+
