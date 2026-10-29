@@ -55,7 +55,10 @@ the mouse on the board:
    drives a [Stockfish](https://stockfishchess.org/) binary via
    [python-chess](https://pypi.org/project/chess/);
 3. a `MoveActuator` plays it — `PyAutoGuiActuator` moves the mouse to the
-   origin square, presses, drags to the destination and releases.
+   origin square, **clicks the piece once to bring the chess app's window to
+   the front** (on macOS the first click on an inactive window only
+   activates it), pauses briefly, then presses on the same piece, drags to
+   the destination and releases.
 
 The engine is behind the `MoveEngine` interface (`best_move(fen) -> uci`), so
 any engine can be dropped in. The assist is optional: if Stockfish, `pyautogui`
