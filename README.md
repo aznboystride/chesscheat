@@ -103,8 +103,10 @@ A control bar under the board adjusts the behaviour at any time, mid-game:
   the program reply immediately.
 - **Watch app** (toggle, on by default) — infers the opponent's moves from
   the real app so you don't have to enter them. While it is the opponent's
-  turn the selected region is captured a few times a second and scanned for
-  the app's **last-move highlight**: the two tinted squares. The move is
+  turn the selected region is captured continuously on a background thread
+  — as fast as the screen can be read, typically dozens of frames a second
+  — and each frame is scanned for the app's **last-move highlight**: the
+  two tinted squares. The move is
   accepted as soon as one tinted square is empty, the other holds a piece of
   the opponent's colour, and that move is legal — then it is entered for you
   and answered as usual. Your own moves are highlighted by the app too; they
@@ -144,7 +146,9 @@ A control bar under the board adjusts the behaviour at any time, mid-game:
 The engine searches on a background thread, so the window stays live
 while it thinks: you can still pause auto-play, undo or start a new game
 mid-search, and a result for a position that has since changed is thrown
-away.
+away. One Stockfish process stays open for the whole session (rather than
+being started for every search and every evaluation), which removes the
+engine start-up cost from each move.
 - **Undo** — takes back the last opponent move *and* whatever followed it
   (the engine's reply, or your own manual move), putting the board back on
   the opponent's turn so you can enter the correct move. A reply still
@@ -164,8 +168,9 @@ grows from white's side, and the score is printed on it — `+0.35` in pawns
 from white's point of view, `M3` / `-M2` for a forced mate, the result
 (`1-0`, `0-1`, `1/2-1/2`) once the game is over. With the local engine this
 is a short Stockfish analysis at full strength regardless of the strength
-setting; a remote engine can supply it too (below), and one that doesn't
-leaves the bar level and blank.
+setting, run only after the reply search has been started so it never
+delays your move; a remote engine can supply it too (below), and one that
+doesn't leaves the bar level and blank.
 
 After the program has dragged its move in the real app, the mouse pointer is
 moved back onto the mirror board, to the square the opponent's last move
